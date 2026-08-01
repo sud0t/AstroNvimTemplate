@@ -20,5 +20,7 @@ return {
   { import = "astrocommunity.pack.bash" },
   -- Rust
   { import = "astrocommunity.pack.rust" },
+  -- TypeScript
+  { import = "astrocommunity.pack.typescript-all-in-one"}
   -- import/override with your plugins folder
 }
