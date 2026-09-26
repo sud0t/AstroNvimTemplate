@@ -21,6 +21,9 @@ return {
   -- Rust
   { import = "astrocommunity.pack.rust" },
   -- TypeScript
-  { import = "astrocommunity.pack.typescript-all-in-one"}
+  { import = "astrocommunity.pack.typescript-all-in-one"},
   -- import/override with your plugins folder
+  -- AI implementation >:(
+  { import = "astrocommunity.ai.codecompanion-nvim"}
+
 }

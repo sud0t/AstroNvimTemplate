@@ -60,6 +60,20 @@ return {
   },
 
   -- My plugin overrides here:
+  {
+    "olimorris/codecompanion.nvim",
+    opts = {
+      interactions = {
+        chat = {
+          adapter = "anthropic",
+          model = "claude-sonnet-5"
+        },
+      },
+      opts = {
+        log_level = "DEBUG",
+      },
+    },
+  },
 
   -- customize dashboard options
   {
