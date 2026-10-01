@@ -1,7 +1,6 @@
 -- AstroCore provides a central place to modify mappings, vim options, autocommands, and more!
 ---@type LazySpec
 return {
-
   "AstroNvim/astrocore",
   ---@type AstroCoreOpts
   opts = {
@@ -12,7 +11,7 @@ return {
       cmp = true, -- enable completion at start
       diagnostics = { virtual_text = true, virtual_lines = false }, -- diagnostic settings on startup
       highlighturl = true, -- highlight URLs at start
-      noifications = true, -- enable notifications at start
+      notifications = true, -- enable notifications at start
     },
     -- Diagnostics configuration (for vim.diagnostics.config({...})) when diagnostics are on
     diagnostics = {
@@ -22,14 +21,8 @@ return {
     -- passed to `vim.filetype.add`
     filetypes = {
       -- see `:h vim.filetype.add` for usage
-      extension = {
-        foo = "fooscript",
-      },
       filename = {
         [".zshrc"] = "zsh",
-      },
-      pattern = {
-        [".*/etc/foo/.*"] = "fooscript",
       },
     },
     -- vim options can be configured here
@@ -65,11 +58,11 @@ return {
         ["<Leader>ue"] = { "<Cmd>Precognition toggle<CR>", desc = "Toggle precognition" },
         -- Fold open / fold close
         ["<Leader>C"] = false,
-        ["<Leader>c"] = { desc = "Folds close/open" },
+        ["<Leader>c"] = { false, desc = "Folds close/open" }, -- `false` drops AstroNvim's close buffer, keeping only the group
         ["<Leader>cc"] = { "<Cmd>foldclose<CR>", desc = "Close fold" },
         ["<Leader>cC"] = { "<Cmd>foldopen<CR>", desc = "Open fold" },
         -- Toggle wrap
-        ["<Leader>w"] = { desc = "Toggle wrap" },
+        ["<Leader>w"] = { false, desc = "Toggle wrap" }, -- `false` drops AstroNvim's save, keeping only the group
         ["<Leader>ww"] = { function() require("astrocore.toggles").wrap() end, desc = "Toggle wrap" },
         -- Neotree better toggle key
         ["\\"] = { "<Cmd>Neotree toggle<CR>", desc = "Toggle Explorer" },
@@ -94,7 +87,7 @@ return {
         ["<Leader>z"] = { desc = "Quickfix/Lists" },
       },
       t = {
-        ["<C-x>"] = { "<Cmd>exit><CR>", desc = "Exit terminal mode" },
+        ["<C-x>"] = { "<C-\\><C-n>", desc = "Exit terminal mode" },
         ["<C-f>"] = { "<Right>", desc = "Fill autosearch" },
       },
     },

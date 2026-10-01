@@ -34,8 +34,7 @@ return {
       -- end
     },
     -- enable servers that you already have installed without mason
-    servers = {
-    },
+    servers = {},
     -- customize language server configuration passed to `vim.lsp.config`
     -- client specific configuration can also go in `lsp/` in your configuration root (see `:h lsp-config`)
     config = {
@@ -70,10 +69,31 @@ return {
           end,
         },
       },
+      -- ghost text with the parameters (and defaults) still missing from the call under the cursor
+      signature_ghost = {
+        cond = "textDocument/signatureHelp",
+        {
+          event = { "CursorMovedI", "TextChangedI" },
+          desc = "Update signature ghost text",
+          callback = function(args) require("user.signature_ghost").schedule(args.buf) end,
+        },
+        {
+          event = { "InsertLeave", "BufLeave" },
+          desc = "Clear signature ghost text",
+          callback = function(args) require("user.signature_ghost").clear(args.buf) end,
+        },
+      },
     },
     -- mappings to be set up on attaching of a language server
     mappings = {
       n = {},
+      i = {
+        ["<M-s>"] = {
+          function() require("user.signature_ghost").accept() end,
+          desc = "Insert signature ghost text / next placeholder",
+          cond = "textDocument/signatureHelp",
+        },
+      },
     },
     -- A custom `on_attach` function to be run after the default `on_attach` function
     -- takes two parameters `client` and `bufnr`  (`:h lsp-attach`)
