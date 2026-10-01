@@ -6,6 +6,7 @@
 --   <A-]>/<A-[> next/prev, <A-e> dismiss
 
 local enabled = false
+local model = "qwen2.5-coder:1.5b-base"
 
 -- minuet only knows a per-buffer switch (`vim.b.minuet_virtual_text_auto_trigger`), so apply it to every buffer
 local function set_auto_trigger(buf)
@@ -29,6 +30,8 @@ local function toggle()
     })
   else
     require("minuet.virtualtext").action.dismiss()
+    -- free the completion model's VRAM now instead of after Ollama's 30 min keep-alive
+    require("user.ollama").unload(model, function() end)
   end
   vim.notify("AI inline completion " .. (enabled and "enabled" or "disabled"))
 end
@@ -61,7 +64,7 @@ return {
         api_key = "TERM", -- Ollama needs no key, but minuet requires the named env var to be set
         name = "Ollama",
         end_point = "http://localhost:11434/v1/completions",
-        model = "qwen2.5-coder:1.5b-base",
+        model = model,
         stream = true,
         optional = {
           max_tokens = 64,

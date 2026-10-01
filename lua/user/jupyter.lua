@@ -86,4 +86,23 @@ function jupyter.run_all()
   end
 end
 
+--- Shut down the kernel(s) of this buffer and clear their outputs: back to a plain Python file.
+function jupyter.stop()
+  if #vim.fn.MoltenRunningKernels(true) == 0 then
+    vim.notify "Jupyter: no kernel running in this buffer"
+    return
+  end
+  vim.cmd "MoltenDeinit"
+  vim.notify "Jupyter: kernel stopped"
+end
+
+--- Stop the cell that is running (keyboard interrupt); the kernel and its variables stay.
+function jupyter.interrupt()
+  if #vim.fn.MoltenRunningKernels(true) == 0 then
+    vim.notify "Jupyter: no kernel running in this buffer"
+    return
+  end
+  vim.cmd "MoltenInterrupt"
+end
+
 return jupyter

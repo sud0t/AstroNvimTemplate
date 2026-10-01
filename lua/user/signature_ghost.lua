@@ -14,6 +14,7 @@ local timer = assert(vim.uv.new_timer())
 local shown = {} -- buf -> { text = ghost text, snippet = snippet body }
 local resolved = setmetatable({}, { __mode = "k" }) -- completion item -> parameter list
 local FUNCTION_KINDS = { [2] = true, [3] = true, [4] = true } -- Method, Function, Constructor
+local enabled = true
 
 api.nvim_set_hl(0, "SignatureGhost", { link = "LspInlayHint", default = true })
 
@@ -290,6 +291,7 @@ end
 
 function M.update(buf)
   buf = buf or api.nvim_get_current_buf()
+  if not enabled then return M.clear(buf) end
   if buf ~= api.nvim_get_current_buf() or not vim.fn.mode():match "^i" then return M.clear(buf) end
   local cursor = api.nvim_win_get_cursor(0)
   local tick = api.nvim_buf_get_changedtick(buf)
@@ -313,6 +315,16 @@ function M.schedule(buf)
   M.clear(buf)
   timer:stop()
   timer:start(120, 0, vim.schedule_wrap(function() M.update(buf) end))
+end
+
+--- Turn the ghost text on/off everywhere (<Leader>uG).
+function M.toggle()
+  enabled = not enabled
+  timer:stop()
+  for buf in pairs(shown) do
+    M.clear(buf)
+  end
+  vim.notify("Signature ghost text " .. (enabled and "enabled" or "disabled"))
 end
 
 --- Insert the ghost text at the cursor as a snippet; without ghost text, jump to the next snippet placeholder

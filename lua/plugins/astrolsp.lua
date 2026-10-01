@@ -92,7 +92,13 @@ return {
     },
     -- mappings to be set up on attaching of a language server
     mappings = {
-      n = {},
+      n = {
+        ["<Leader>uG"] = {
+          function() require("user.signature_ghost").toggle() end,
+          desc = "Toggle signature ghost text",
+          cond = "textDocument/signatureHelp",
+        },
+      },
       i = {
         ["<M-s>"] = {
           function() require("user.signature_ghost").accept() end,

@@ -66,6 +66,8 @@ return {
       { "<leader>jh", "<cmd>MoltenHideOutput<CR>", desc = "Jupyter: hide output" },
       { "<leader>jd", "<cmd>MoltenDelete<CR>", desc = "Jupyter: delete cell output" },
       { "<leader>jr", "<cmd>MoltenRestart<CR>", desc = "Jupyter: restart kernel" },
+      { "<leader>ji", function() require("user.jupyter").interrupt() end, desc = "Jupyter: interrupt running cell" },
+      { "<leader>jq", function() require("user.jupyter").stop() end, desc = "Jupyter: stop kernel, clear outputs" },
     },
   },
 }
