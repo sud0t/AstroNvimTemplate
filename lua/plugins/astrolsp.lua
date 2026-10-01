@@ -39,6 +39,8 @@ return {
     -- client specific configuration can also go in `lsp/` in your configuration root (see `:h lsp-config`)
     config = {
       -- ["*"] = { capabilities = {} }, -- modify default LSP client settings such as capabilities
+      -- ruff logs its routine INFO/WARN messages to stderr, which ends up in lsp.log as errors
+      ruff = { init_options = { settings = { logLevel = "error" } } },
     },
     -- customize how language servers are attached
     handlers = {
@@ -47,6 +49,10 @@ return {
 
       -- the key is the server that is being setup with `vim.lsp.config`
       -- rust_analyzer = false, -- setting a handler to false will disable the set up of that language server
+
+      -- mason-lspconfig starts every installed server, and the stylua package also ships a language server
+      -- mode; the lua pack already formats with stylua through none-ls, so this would format Lua twice
+      stylua = false,
     },
     -- Configure buffer local auto commands to add when attaching a language server
     autocmds = {

@@ -27,4 +27,8 @@ return {
   { import = "astrocommunity.ai.codecompanion-nvim" },
   -- local inline code completion (overridden in plugins/minuet.lua)
   { import = "astrocommunity.ai.minuet-ai-nvim" },
+  -- Tools (keymaps adjusted in the matching plugins/ files)
+  { import = "astrocommunity.diagnostics.trouble-nvim" },
+  { import = "astrocommunity.editing-support.refactoring-nvim" },
+  { import = "astrocommunity.git.diffview-nvim" },
 }

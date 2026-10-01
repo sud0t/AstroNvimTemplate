@@ -37,6 +37,7 @@ return {
       g = {
         loaded_perl_provider = 0,
         loaded_ruby_provider = 0,
+        loaded_node_provider = 0, -- no Node remote plugins in use (the python3 provider stays: molten needs it)
       },
       o = {
         scrolloff = 10,

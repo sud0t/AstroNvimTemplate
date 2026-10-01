@@ -8,6 +8,7 @@
 return {
   {
     "3rd/image.nvim",
+    lazy = true, -- only molten needs it; loads with molten
     version = "^1.5",
     build = false, -- skip the luarocks build, the magick_cli processor only needs ImageMagick installed
     opts = {
@@ -34,12 +35,17 @@ return {
       vim.g.molten_auto_open_output = false -- use <leader>jo for the full output window
       vim.g.molten_wrap_output = true
       vim.g.molten_output_win_max_height = 20
-      -- tint the `# %%` lines so cells are visible in a plain .py file
+      -- tint the `# %%` lines so cells are visible in a plain .py file (window-local, so drop it again when
+      -- the window switches to another filetype)
       vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter" }, {
         group = vim.api.nvim_create_augroup("jupyter_cell_markers", { clear = true }),
         callback = function(ev)
-          if vim.bo[ev.buf].filetype == "python" and vim.w.jupyter_cell_hl == nil then
+          local python = vim.bo[ev.buf].filetype == "python"
+          if python and vim.w.jupyter_cell_hl == nil then
             vim.w.jupyter_cell_hl = vim.fn.matchadd("Folded", [[^# %%.*$]])
+          elseif not python and vim.w.jupyter_cell_hl ~= nil then
+            pcall(vim.fn.matchdelete, vim.w.jupyter_cell_hl)
+            vim.w.jupyter_cell_hl = nil
           end
         end,
       })
@@ -55,7 +61,7 @@ return {
       { "<leader>ja", function() require("user.jupyter").run_all() end, desc = "Jupyter: run all cells" },
       { "]j", function() require("user.jupyter").jump(1) end, desc = "Next cell" },
       { "[j", function() require("user.jupyter").jump(-1) end, desc = "Previous cell" },
-      { "<leader>jv", ":<C-u>MoltenEvaluateVisual<CR>", mode = "v", silent = true, desc = "Jupyter: run selection" },
+      { "<leader>jv", ":<C-u>MoltenEvaluateVisual<CR>", mode = "x", silent = true, desc = "Jupyter: run selection" },
       { "<leader>jo", ":noautocmd MoltenEnterOutput<CR>", silent = true, desc = "Jupyter: open full output" },
       { "<leader>jh", "<cmd>MoltenHideOutput<CR>", desc = "Jupyter: hide output" },
       { "<leader>jd", "<cmd>MoltenDelete<CR>", desc = "Jupyter: delete cell output" },

@@ -33,6 +33,9 @@ end
 ---@type LazySpec
 return {
   "olimorris/codecompanion.nvim",
+  -- the community module loads it on every opened file (~13ms); its commands, the <Leader>A mappings and
+  -- require() already load it on demand
+  event = function() return {} end,
   init = function()
     vim.api.nvim_create_autocmd("User", {
       pattern = "CodeCompanionRequestFinished",
@@ -48,8 +51,17 @@ return {
     {
       "AstroNvim/astrocore",
       opts = function(_, opts)
-        opts.mappings.n["<Leader>AR"] = { suggest_improvements, desc = "Suggest improvements (buffer)" }
-        opts.mappings.v["<Leader>AR"] = { suggest_improvements, desc = "Suggest improvements (selection)" }
+        local maps = opts.mappings
+        maps.x = maps.x or {}
+        -- visual-only (x): `v` mappings also apply in select mode, where typing a space into a snippet
+        -- placeholder would start a <Leader> mapping
+        for lhs, map in pairs(maps.v or {}) do
+          if lhs:match "^<Leader>A" then
+            maps.x[lhs], maps.v[lhs] = map, nil
+          end
+        end
+        maps.n["<Leader>AR"] = { suggest_improvements, desc = "Suggest improvements (buffer)" }
+        maps.x["<Leader>AR"] = { suggest_improvements, desc = "Suggest improvements (selection)" }
       end,
     },
   },
@@ -109,7 +121,7 @@ return {
       },
     },
     opts = {
-      log_level = "DEBUG",
+      log_level = "ERROR", -- DEBUG logged every request in full
     },
   },
 }

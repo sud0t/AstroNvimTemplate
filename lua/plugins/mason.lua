@@ -25,6 +25,7 @@ return {
 
         -- install debuggers
         "debugpy",
+        "local-lua-debugger-vscode", -- Lua scripts (configured in plugins/dap.lua)
 
         -- install any other package
         "tree-sitter-cli",
