@@ -78,6 +78,8 @@ return {
         -- In codelldb's integrated terminal the output of a program that exits right away is lost (the launcher
         -- closes the terminal before Neovim reads it), so the default configurations print to the debug console
         -- (dap-ui REPL pane) instead. "(terminal, for input)" variants keep the terminal for programs that read stdin.
+        -- These path-prompt configurations are for C/C++; Rust sessions start from cargo targets through
+        -- rustaceanvim (plugins/rust.lua) and only fall back to them via :DapContinue.
         local function program()
           local guess = vim.fn.expand "%:p:r" -- the binary next to the source file, e.g. main.c -> main
           local default = vim.fn.executable(guess) == 1 and guess or vim.fn.getcwd() .. "/"
