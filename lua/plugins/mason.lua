@@ -17,6 +17,7 @@ return {
         "html-lsp",
         "lemminx",
         "json-lsp",
+        "texlab",
 
         -- install formatters
         "stylua",
