@@ -171,6 +171,18 @@ return {
     "AstroNvim/astrolsp",
     ---@type AstroLSPOpts
     opts = {
+      config = {
+        rust_analyzer = {
+          -- nvim-lspconfig's rust_analyzer entry (which rustaceanvim merges into its client config) uses this hook
+          -- to replace the handler for the "Run" codelens with one that runs cargo synchronously, blocking Neovim
+          -- until the program exits, and then shows its stdout as a notification. That overrides rustaceanvim's
+          -- handler, which runs it in a terminal split like `:RustLsp runnables`. Keep only the hook's other job.
+          before_init = function(init_params, config)
+            local settings = config.settings and config.settings["rust-analyzer"]
+            if settings then init_params.initializationOptions = settings end
+          end,
+        },
+      },
       mappings = {
         n = {
           ["<Leader>dc"] = { continue, desc = "Start/Continue (F5)", cond = is_rust_analyzer },

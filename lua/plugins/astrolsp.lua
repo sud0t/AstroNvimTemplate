@@ -93,6 +93,35 @@ return {
     -- mappings to be set up on attaching of a language server
     mappings = {
       n = {
+        -- Run the codelens shown on the current line. AstroLSP's `vim.lsp.codelens.run()` asks the server for the
+        -- lenses again and gives up ("No codelens at current line") whenever the server is busy and answers
+        -- "content modified" (rust-analyzer does, right after an edit or while indexing). The lenses already on
+        -- screen are the ones being looked at, so run those; fall back to the request when none are cached.
+        ["<Leader>lL"] = {
+          function()
+            local bufnr = vim.api.nvim_get_current_buf()
+            local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+            local candidates = {}
+            for _, item in ipairs(vim.lsp.codelens.get { bufnr = bufnr }) do
+              if item.lens.range.start.line == row and item.lens.command then
+                local client = vim.lsp.get_client_by_id(item.client_id)
+                if client then table.insert(candidates, { client = client, lens = item.lens }) end
+              end
+            end
+            if #candidates == 0 then return vim.lsp.codelens.run() end
+            local function run(candidate) candidate.client:exec_cmd(candidate.lens.command, { bufnr = bufnr }) end
+            if #candidates == 1 then return run(candidates[1]) end
+            vim.ui.select(candidates, {
+              prompt = "Code lenses: ",
+              kind = "codelens",
+              format_item = function(candidate) return candidate.lens.command.title end,
+            }, function(candidate)
+              if candidate then run(candidate) end
+            end)
+          end,
+          desc = "LSP CodeLens run",
+          cond = "textDocument/codeLens",
+        },
         ["<Leader>uG"] = {
           function() require("user.signature_ghost").toggle() end,
           desc = "Toggle signature ghost text",

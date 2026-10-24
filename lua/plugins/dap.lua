@@ -63,6 +63,44 @@ return {
     end,
   },
   {
+    "rcarriga/nvim-dap-ui",
+    optional = true,
+    config = function(...)
+      require "astronvim.plugins.configs.nvim-dap-ui"(...)
+      local dap, dapui = require "dap", require "dapui"
+      -- AstroNvim closes the debug UI the moment a session ends. A program that runs to completion in a few
+      -- milliseconds (the Debug codelens or <Leader>dd without a breakpoint) only flashes the UI, and its output in
+      -- the console pane is gone before it can be read. Keep the UI open when the program exits on its own, and
+      -- close it only when the session was stopped by hand (<Leader>dq, <Leader>dQ, Shift+F5).
+      local stopped_by_user = setmetatable({}, { __mode = "k" }) -- session -> true
+      for _, request in ipairs { "terminate", "disconnect" } do
+        dap.listeners.before[request].dapui_config = function(session) stopped_by_user[session] = true end
+      end
+      local close = dap.close
+      dap.close = function(...)
+        local session = dap.session()
+        if session then stopped_by_user[session] = true end
+        local result = close(...)
+        dapui.close() -- dap.close() ends the session without the adapter sending `terminated`
+        return result
+      end
+      dap.listeners.before.event_terminated.dapui_config = function(session)
+        if stopped_by_user[session] then dapui.close() end
+      end
+      dap.listeners.before.event_exited.dapui_config = function(session, body)
+        if stopped_by_user[session] then return dapui.close() end
+        local code = body and body.exitCode
+        vim.notify(
+          ("Program exited%s. The output is in the console pane; <Leader>du closes the debug UI."):format(
+            code and (" with code " .. code) or ""
+          ),
+          code == 0 and vim.log.levels.INFO or vim.log.levels.WARN,
+          { title = "Debugger" }
+        )
+      end
+    end,
+  },
+  {
     "jay-babu/mason-nvim-dap.nvim",
     optional = true,
     opts = function(_, opts)
