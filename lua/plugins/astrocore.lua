@@ -69,6 +69,7 @@ return {
         ["\\"] = { "<Cmd>Neotree toggle<CR>", desc = "Toggle Explorer" },
         ["<Leader>e"] = false, -- AstroNvim's explorer toggle and focus: \ does that
         ["<Leader>o"] = false,
+        ["<Leader>R"] = false, -- AstroNvim's rename file; <Leader>R is the Rust command group in Rust buffers (plugins/rust.lua)
         -- Change list keys so I can use leader x for closing buffers
         ["<Leader>zq"] = { "<Cmd>copen<CR>", desc = "Quickfix List" },
         ["<Leader>zl"] = { "<Cmd>lopen<CR>", desc = "Location List" },

@@ -1,24 +1,22 @@
-if true then return {} end -- WARN: REMOVE THIS LINE TO ACTIVATE THIS FILE
-
--- Customize None-ls sources
+-- none-ls (null-ls) only serves a few filetypes here: stylua/selene for Lua and biome for the web languages
+-- (mason-null-ls registers sources for the Mason tools that have a none-ls builtin). AstroNvim loads it, with
+-- mason-null-ls, on every opened file (`User AstroFile`, ~35ms), so load it on those filetypes instead.
+-- Add the filetypes of any new Mason formatter/linter with a none-ls builtin here.
 
 ---@type LazySpec
 return {
   "nvimtools/none-ls.nvim",
-  opts = function(_, opts)
-    -- opts variable is the default configuration table for the setup function call
-    -- local null_ls = require "null-ls"
-
-    -- Check supported formatters and linters
-    -- https://github.com/nvimtools/none-ls.nvim/tree/main/lua/null-ls/builtins/formatting
-    -- https://github.com/nvimtools/none-ls.nvim/tree/main/lua/null-ls/builtins/diagnostics
-
-    -- Only insert new sources, do not replace the existing ones
-    -- (If you wish to replace, use `opts.sources = {}` instead of the `list_insert_unique` function)
-    opts.sources = require("astrocore").list_insert_unique(opts.sources, {
-      -- Set a formatter
-      -- null_ls.builtins.formatting.stylua,
-      -- null_ls.builtins.formatting.prettier,
-    })
-  end,
+  event = function() return {} end, -- drop AstroNvim's `User AstroFile`
+  ft = {
+    "lua",
+    "luau",
+    "css",
+    "graphql",
+    "javascript",
+    "javascriptreact",
+    "json",
+    "jsonc",
+    "typescript",
+    "typescriptreact",
+  },
 }

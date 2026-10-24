@@ -45,10 +45,56 @@ end
 
 local function is_rust_analyzer(client) return client.name == "rust-analyzer" end
 
+-- `:RustLsp <cmd>`; a table adds arguments / bang: rust_lsp { "runnables", bang = true } re-runs the last one
+local function rust_lsp(cmd)
+  return function() vim.cmd.RustLsp(cmd) end
+end
+
 local warned_missing_component = false -- rustaceanvim resolves the server command more than once per start
+
+-- rust-analyzer asks for a codelens refresh while it is still indexing a workspace, and answers the
+-- `codeLens/resolve` requests Neovim then sends for the "N references" / "N implementations" lenses with
+-- "content modified" once indexing finishes. Neovim 0.12 does not retry a failed resolve, so those lenses stay as
+-- the blank placeholder lines it draws above the item until the next request (an edit, a reload, or the server
+-- asking again). Re-request once the loading phases (`rustAnalyzer/...` progress tokens; flycheck runs are
+-- `rust-analyzer/flycheck/...`) have been quiet for a moment, through the same handler the server's request uses.
+local refresh_generation = {} ---@type table<integer, integer> client id -> last scheduled refresh
+local function refresh_codelens_after_indexing(ev)
+  local params = ev.data.params
+  if params.value.kind ~= "end" or type(params.token) ~= "string" or not vim.startswith(params.token, "rustAnalyzer/") then
+    return
+  end
+  local client = vim.lsp.get_client_by_id(ev.data.client_id)
+  if not client or not is_rust_analyzer(client) then return end
+  local generation = (refresh_generation[client.id] or 0) + 1
+  refresh_generation[client.id] = generation
+  vim.defer_fn(function()
+    if refresh_generation[client.id] ~= generation then return end -- another phase ended since; wait for that one
+    refresh_generation[client.id] = nil
+    local refresh = vim.lsp.handlers["workspace/codeLens/refresh"]
+    if refresh and vim.lsp.get_client_by_id(client.id) then
+      refresh(nil, nil, { client_id = client.id, method = "workspace/codeLens/refresh" })
+    end
+  end, 500)
+end
 
 ---@type LazySpec
 return {
+  {
+    "AstroNvim/astrocore",
+    ---@type AstroCoreOpts
+    opts = {
+      autocmds = {
+        rust_analyzer_codelens = {
+          {
+            event = "LspProgress",
+            desc = "Re-request codelens once rust-analyzer has finished indexing",
+            callback = refresh_codelens_after_indexing,
+          },
+        },
+      },
+    },
+  },
   {
     "mrcjkb/rustaceanvim",
     -- rustaceanvim starts rust-analyzer from its ftplugin, on the FileType event, which for the first file of a
@@ -132,6 +178,32 @@ return {
           ["<Leader>dd"] = { debuggables, desc = "Debug cargo target", cond = is_rust_analyzer },
           ["<Leader>dD"] = { debug_at_cursor, desc = "Debug target at cursor", cond = is_rust_analyzer },
           ["<Leader>dl"] = { debug_last, desc = "Debug last cargo target", cond = is_rust_analyzer },
+
+          -- rustaceanvim's :RustLsp commands, only in rust-analyzer buffers (AstroNvim's "Rename file" on
+          -- <Leader>R is dropped in plugins/astrocore.lua)
+          ["<Leader>R"] = { desc = "Rust", cond = is_rust_analyzer },
+          ["<Leader>Rr"] = { rust_lsp "runnables", desc = "Runnables (cargo run/test/bench picker)", cond = is_rust_analyzer },
+          ["<Leader>RR"] = { rust_lsp { "runnables", bang = true }, desc = "Re-run last runnable", cond = is_rust_analyzer },
+          ["<Leader>Rt"] = { rust_lsp "testables", desc = "Testables (test picker)", cond = is_rust_analyzer },
+          ["<Leader>RT"] = { rust_lsp { "testables", bang = true }, desc = "Re-run last test", cond = is_rust_analyzer },
+          ["<Leader>Re"] = { rust_lsp "explainError", desc = "Explain next error (rustc --explain)", cond = is_rust_analyzer },
+          ["<Leader>Rd"] = { rust_lsp "renderDiagnostic", desc = "Render next diagnostic (cargo style)", cond = is_rust_analyzer },
+          ["<Leader>Rf"] = { rust_lsp { "flyCheck", "run" }, desc = "Check now (clippy without saving)", cond = is_rust_analyzer },
+          ["<Leader>Rh"] = { rust_lsp { "hover", "actions" }, desc = "Hover with actions", cond = is_rust_analyzer },
+          ["<Leader>Rm"] = { rust_lsp "expandMacro", desc = "Expand macro", cond = is_rust_analyzer },
+          ["<Leader>Ro"] = { rust_lsp "openDocs", desc = "Open docs.rs for symbol", cond = is_rust_analyzer },
+          ["<Leader>Rc"] = { rust_lsp "openCargo", desc = "Open Cargo.toml", cond = is_rust_analyzer },
+          ["<Leader>Rp"] = { rust_lsp "parentModule", desc = "Parent module", cond = is_rust_analyzer },
+          ["<Leader>Rs"] = { rust_lsp "ssr", desc = "Structural search replace", cond = is_rust_analyzer },
+          ["<Leader>RJ"] = { rust_lsp "joinLines", desc = "Join lines", cond = is_rust_analyzer },
+          ["<Leader>Rk"] = { rust_lsp { "moveItem", "up" }, desc = "Move item up", cond = is_rust_analyzer },
+          ["<Leader>Rj"] = { rust_lsp { "moveItem", "down" }, desc = "Move item down", cond = is_rust_analyzer },
+        },
+        x = {
+          ["<Leader>R"] = { desc = "Rust", cond = is_rust_analyzer },
+          -- `:` from visual mode fills in the '<,'> range, which these commands use
+          ["<Leader>RJ"] = { ":RustLsp joinLines<CR>", desc = "Join lines", cond = is_rust_analyzer },
+          ["<Leader>Rs"] = { ":RustLsp ssr<CR>", desc = "Structural search replace", cond = is_rust_analyzer },
         },
       },
     },
