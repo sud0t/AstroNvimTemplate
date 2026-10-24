@@ -45,19 +45,40 @@ end
 
 local function is_rust_analyzer(client) return client.name == "rust-analyzer" end
 
+local warned_missing_component = false -- rustaceanvim resolves the server command more than once per start
+
 ---@type LazySpec
 return {
   {
     "mrcjkb/rustaceanvim",
+    -- rustaceanvim starts rust-analyzer from its ftplugin, on the FileType event, which for the first file of a
+    -- session comes before `User AstroFile` loads AstroLSP. rust-analyzer then started with the plain nvim-lspconfig
+    -- config: no clippy, no `target/` exclusion and none of the capabilities the LSP packs add (blink.cmp snippets).
+    -- Loading AstroLSP first registers its `vim.lsp.config` entries before the server starts.
+    dependencies = { "AstroNvim/astrolsp" },
     -- the pack's `config` already writes these opts into `vim.g.rustaceanvim`
     opts = function(_, opts)
       opts.server = opts.server or {}
-      -- use the rust-analyzer that matches the active rustup toolchain
+      -- use the rust-analyzer that matches the active rustup toolchain; a project pinned to a toolchain without the
+      -- component (rust-toolchain.toml) falls back to the stable one, since the bare `rust-analyzer` proxy would
+      -- only print "Unknown binary 'rust-analyzer' in official toolchain" and no server would start
       opts.server.cmd = function()
-        local ra_path = vim.fn.system("rustup which rust-analyzer"):gsub("%s+$", "")
-        -- rustup missing / no toolchain: don't hand an error message to the LSP client as the command
-        if vim.v.shell_error ~= 0 or ra_path == "" then return { "rust-analyzer" } end
-        return { ra_path }
+        for _, args in ipairs { "", " --toolchain stable" } do
+          local ra_path = vim.fn.system("rustup which" .. args .. " rust-analyzer"):gsub("%s+$", "")
+          if vim.v.shell_error == 0 and ra_path ~= "" then
+            if args ~= "" and not warned_missing_component then
+              warned_missing_component = true
+              vim.notify(
+                "The active toolchain has no rust-analyzer component (rustup component add rust-analyzer); "
+                  .. "using the stable one",
+                vim.log.levels.WARN,
+                { title = "rust-analyzer" }
+              )
+            end
+            return { ra_path }
+          end
+        end
+        return { "rust-analyzer" } -- rustup missing: whatever is on PATH
       end
 
       opts.dap = require("astrocore").extend_tbl(opts.dap, {

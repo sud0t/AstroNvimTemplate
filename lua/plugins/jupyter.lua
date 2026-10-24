@@ -50,24 +50,31 @@ return {
         end,
       })
     end,
-    keys = {
-      -- first press in a file: molten asks which kernel to start, then runs the cell
-      {
-        "<leader>J",
-        function() require("user.jupyter").run_cell(true) end,
-        desc = "Jupyter: run cell and move to next",
-      },
-      { "<leader>jc", function() require("user.jupyter").run_cell(false) end, desc = "Jupyter: run cell" },
-      { "<leader>ja", function() require("user.jupyter").run_all() end, desc = "Jupyter: run all cells" },
-      { "]j", function() require("user.jupyter").jump(1) end, desc = "Next cell" },
-      { "[j", function() require("user.jupyter").jump(-1) end, desc = "Previous cell" },
-      { "<leader>jv", ":<C-u>MoltenEvaluateVisual<CR>", mode = "x", silent = true, desc = "Jupyter: run selection" },
-      { "<leader>jo", ":noautocmd MoltenEnterOutput<CR>", silent = true, desc = "Jupyter: open full output" },
-      { "<leader>jh", "<cmd>MoltenHideOutput<CR>", desc = "Jupyter: hide output" },
-      { "<leader>jd", "<cmd>MoltenDelete<CR>", desc = "Jupyter: delete cell output" },
-      { "<leader>jr", "<cmd>MoltenRestart<CR>", desc = "Jupyter: restart kernel" },
-      { "<leader>ji", function() require("user.jupyter").interrupt() end, desc = "Jupyter: interrupt running cell" },
-      { "<leader>jq", function() require("user.jupyter").stop() end, desc = "Jupyter: stop kernel, clear outputs" },
-    },
+    -- buffer-local to Python buffers (lazy.nvim's `ft`), so which-key lists them nowhere else
+    keys = function()
+      local keys = {
+        -- first press in a file: molten asks which kernel to start, then runs the cell
+        {
+          "<leader>J",
+          function() require("user.jupyter").run_cell(true) end,
+          desc = "Jupyter: run cell and move to next",
+        },
+        { "<leader>jc", function() require("user.jupyter").run_cell(false) end, desc = "Jupyter: run cell" },
+        { "<leader>ja", function() require("user.jupyter").run_all() end, desc = "Jupyter: run all cells" },
+        { "]j", function() require("user.jupyter").jump(1) end, desc = "Next cell" },
+        { "[j", function() require("user.jupyter").jump(-1) end, desc = "Previous cell" },
+        { "<leader>jv", ":<C-u>MoltenEvaluateVisual<CR>", mode = "x", silent = true, desc = "Jupyter: run selection" },
+        { "<leader>jo", ":noautocmd MoltenEnterOutput<CR>", silent = true, desc = "Jupyter: open full output" },
+        { "<leader>jh", "<cmd>MoltenHideOutput<CR>", desc = "Jupyter: hide output" },
+        { "<leader>jd", "<cmd>MoltenDelete<CR>", desc = "Jupyter: delete cell output" },
+        { "<leader>jr", "<cmd>MoltenRestart<CR>", desc = "Jupyter: restart kernel" },
+        { "<leader>ji", function() require("user.jupyter").interrupt() end, desc = "Jupyter: interrupt running cell" },
+        { "<leader>jq", function() require("user.jupyter").stop() end, desc = "Jupyter: stop kernel, clear outputs" },
+      }
+      for _, key in ipairs(keys) do
+        key.ft = "python"
+      end
+      return keys
+    end,
   },
 }

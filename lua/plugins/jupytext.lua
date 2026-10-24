@@ -27,17 +27,25 @@ local function new_notebook(ev)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "" })
   vim.bo[buf].filetype = "python"
   vim.bo[buf].modified = false
+  -- stays until a write succeeds: a `once` handler consumed by a failed conversion would let the next :w fall
+  -- back to a plain write, putting the `# %%` text into the .ipynb file as is. One group per buffer, so a reload
+  -- (:e!) of the unsaved notebook replaces the handler instead of adding a second one.
+  local group = vim.api.nvim_create_augroup("jupytext_new_notebook_" .. buf, { clear = true })
   vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
     buffer = buf,
-    once = true,
+    nested = true, -- the `edit!` below has to trigger the BufReadCmd handler that reads notebooks
     callback = function()
       local tmp = vim.fn.tempname() .. ".py"
       vim.fn.writefile(vim.api.nvim_buf_get_lines(buf, 0, -1, false), tmp)
       local res = vim.system({ "jupytext", "--from", "py:percent", "--to", "ipynb", "--output", file, tmp }):wait()
       vim.fn.delete(tmp)
       if res.code ~= 0 then
-        return vim.notify("jupytext: " .. (res.stderr or ""), vim.log.levels.ERROR, { title = "jupytext" })
+        -- not `return vim.notify(...)`: a truthy return value from an autocmd callback deletes the autocmd
+        vim.notify("jupytext: " .. (res.stderr or ""), vim.log.levels.ERROR, { title = "jupytext" })
+        return
       end
+      vim.api.nvim_clear_autocmds { group = group }
       vim.bo[buf].modified = false
       vim.cmd.edit { bang = true } -- reopen through jupytext.nvim, now that the notebook exists
     end,

@@ -14,6 +14,8 @@ return {
     highlights = {
       init = { -- this table overrides highlights in all themes
         -- Normal = { bg = "#000000" },
+        -- parameter ghost text (lua/user/signature_ghost.lua); set here so it survives a colorscheme change
+        SignatureGhost = { link = "LspInlayHint" },
       },
       astrodark = { -- a table of overrides/changes when applying the astrotheme theme
         -- Normal = { bg = "#000000" },

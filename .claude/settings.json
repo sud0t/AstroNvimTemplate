@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(hyprctl clients *)",
+      "Bash(npm view *)",
+      "Bash(lsblk *)",
+      "Bash(magick identify *)",
+      "Bash(systemctl show *)",
+      "Bash(ollama list)",
+      "Bash(pacman -Q*)",
+      "Bash(journalctl -b *)",
+      "Bash(hyprctl activewindow)"
+    ]
+  }
+}

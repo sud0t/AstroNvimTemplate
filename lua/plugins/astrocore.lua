@@ -67,6 +67,8 @@ return {
         ["<Leader>ww"] = { function() require("astrocore.toggles").wrap() end, desc = "Toggle wrap" },
         -- Neotree better toggle key
         ["\\"] = { "<Cmd>Neotree toggle<CR>", desc = "Toggle Explorer" },
+        ["<Leader>e"] = false, -- AstroNvim's explorer toggle and focus: \ does that
+        ["<Leader>o"] = false,
         -- Change list keys so I can use leader x for closing buffers
         ["<Leader>zq"] = { "<Cmd>copen<CR>", desc = "Quickfix List" },
         ["<Leader>zl"] = { "<Cmd>lopen<CR>", desc = "Location List" },
