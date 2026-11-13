@@ -5,6 +5,7 @@
 -- when the completion menu is closed) jumps to the next one.
 -- Inside a call, the data comes from signature help (`textDocument/signatureHelp`); for the selected completion
 -- item, from the signature in its documentation (`completionItem/resolve`).
+-- Off by default: <Leader>uG toggles it (everywhere, for the session).
 -- Hooked up per buffer in plugins/astrolsp.lua.
 local M = {}
 
@@ -14,7 +15,7 @@ local timer = assert(vim.uv.new_timer())
 local shown = {} -- buf -> { text = ghost text, snippet = snippet body }
 local resolved = setmetatable({}, { __mode = "k" }) -- completion item -> parameter list
 local FUNCTION_KINDS = { [2] = true, [3] = true, [4] = true } -- Method, Function, Constructor
-local enabled = true
+local enabled = false -- off at startup, <Leader>uG turns it on
 -- languages that declare a parameter as `type name`
 local TYPE_FIRST = { c = true, cpp = true, objc = true, objcpp = true, cuda = true, java = true, cs = true }
 

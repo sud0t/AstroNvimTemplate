@@ -1,11 +1,12 @@
--- precognition to help with my nvim motions (toggled with <Leader>ue, see astrocore.lua)
+-- precognition to help with my nvim motions: off at startup, <Leader>ue turns it on and off (see astrocore.lua).
+-- Loaded by that key (its :Precognition command), so it costs nothing until it is wanted.
 
 ---@type LazySpec
 return {
   "tris203/precognition.nvim",
-  event = "VeryLazy",
+  cmd = "Precognition",
   opts = {
-    -- startVisible = true,
+    startVisible = false, -- the first <Leader>ue loads it hidden and then toggles it on
     -- debounceMs = 0,
     showBlankVirtLine = false,
     -- highlightFullVirtLine = false,
