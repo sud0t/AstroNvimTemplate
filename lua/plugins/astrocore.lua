@@ -51,7 +51,8 @@ return {
         ["<C-j>"] = { "<Down>", desc = "Move down" },
         ["<C-k>"] = { "<Up>", desc = "Move up" },
         ["<C-l>"] = { "<Right>", desc = "Move right" },
-        ["<C-a>"] = { "<ESC>^i", desc = "move beginning of line" },
+        -- <C-o> stays in insert mode: no InsertLeave (LaTeX autosave, multicursor hand-over) for a cursor move
+        ["<C-a>"] = { "<C-o>^", desc = "move beginning of line" },
         ["<C-e>"] = { "<End>", desc = "move end of line" },
       },
       n = {

@@ -21,6 +21,10 @@ return {
   { import = "astrocommunity.pack.bash" },
   -- Rust (overridden in plugins/rust.lua)
   { import = "astrocommunity.pack.rust" },
+  -- Go (adjusted in plugins/go.lua)
+  { import = "astrocommunity.pack.go" },
+  -- test runner (<Leader>T); the language packs add their adapters to it
+  { import = "astrocommunity.test.neotest" },
   -- TypeScript
   { import = "astrocommunity.pack.typescript-all-in-one" },
   -- AI implementation >:( (overridden in plugins/codecompanion.lua)

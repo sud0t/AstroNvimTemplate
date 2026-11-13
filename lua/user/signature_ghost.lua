@@ -15,6 +15,8 @@ local shown = {} -- buf -> { text = ghost text, snippet = snippet body }
 local resolved = setmetatable({}, { __mode = "k" }) -- completion item -> parameter list
 local FUNCTION_KINDS = { [2] = true, [3] = true, [4] = true } -- Method, Function, Constructor
 local enabled = true
+-- languages that declare a parameter as `type name`
+local TYPE_FIRST = { c = true, cpp = true, objc = true, objcpp = true, cuda = true, java = true, cs = true }
 
 api.nvim_set_hl(0, "SignatureGhost", { link = "LspInlayHint", default = true })
 
@@ -62,12 +64,14 @@ end
 
 -- Parameter text -> { name, default } or { marker = "/" | "*" | "*args" | "**kwargs" }. Looks like
 -- `strict: bool = True` (Python), `strict: boolean` (Lua/TS), `options?: Options` (TS), `strict: bool` (Rust).
-local function parse_param(label)
+-- `type_first`: `int count = 0` (C, C++, Java), where the name is the last word of the declaration.
+local function parse_param(label, type_first)
   label = vim.trim(label)
   if label == "/" or label == "*" then return { marker = label } end
   if label:match "^%*%*" then return { marker = "**kwargs" } end
   if label:match "^%*" or label:match "^%.%.%." then return { marker = "*args" } end
   local name = label:match "^[%w_$]+"
+  if type_first then name = (label:match "^[^=]*" or label):match "([%a_][%w_]*)[%s%[%]%d]*$" end
   if not name then return nil end
   local default = label:match "=%s*(.-)%s*$"
   return { name = name, default = default ~= "" and default or nil }
@@ -117,7 +121,7 @@ local function keyword_of(arg) return arg:match "^%s*([%w_]+)%s*=[^=]" or arg:ma
 
 -- Inside a call: what is still missing, worked out from the typed arguments rather than the server's
 -- "active parameter", which points at **kwargs as soon as a call only takes keyword arguments.
-local function call_ghost(result, args)
+local function call_ghost(result, args, type_first)
   local sig = result and result.signatures and result.signatures[(result.activeSignature or 0) + 1]
   if not sig or not sig.parameters or #sig.parameters == 0 then return nil end
 
@@ -135,7 +139,7 @@ local function call_ghost(result, args)
 
   local missing, keyword_only = {}, false
   for _, param in ipairs(sig.parameters) do
-    local p = parse_param(sig_param_label(sig.label, param.label))
+    local p = parse_param(sig_param_label(sig.label, param.label), type_first)
     if p and p.marker then
       if p.marker == "*" or p.marker == "*args" then keyword_only = true end
       if p.marker == "*args" then positional = 0 end -- *args swallows the remaining positional arguments
@@ -176,44 +180,69 @@ local function call_ghost(result, args)
   return render(join(params, current_blank and {} or { ", " }))
 end
 
--- Parameters of a completion item, from the signature in the first code block of its documentation
--- (falls back to the label, e.g. lua_ls's `nvim_buf_set_lines(buf, start, ...)`).
-local function item_params(item)
-  local doc = item.documentation
-  doc = type(doc) == "table" and doc.value or doc or ""
-  local name = (item.filterText or item.label):match "^[%w_.:$]+" or ""
-  for _, source in ipairs { doc:match "```[%w_]*\n(.-)\n```", item.label } do
-    local s = source:find(name .. "%s*%(") or source:find "%("
-    local open = s and source:find("(", s, true)
-    if open then
-      local depth, close = 0, nil
-      for i = open, #source do
-        local c = source:sub(i, i)
-        if c == "(" then
-          depth = depth + 1
-        elseif c == ")" then
-          depth = depth - 1
-          if depth == 0 then
-            close = i
-            break
-          end
-        end
-      end
-      if close then
-        local params = {}
-        local inner = source:sub(open + 1, close - 1)
-        if inner:match "%S" then
-          for i, arg in ipairs(split_args(inner:gsub("\n", " "), true)) do
-            local p = parse_param(arg)
-            if p and not p.marker and not (i == 1 and (p.name == "self" or p.name == "cls")) then
-              params[#params + 1] = p
-            end
-          end
-        end
-        return params
+-- Parameters in the call of `name` found in `source` (a signature), nil when there is none. `verbatim` keeps each
+-- one as it is written instead of taking it apart into name and default; `named` only accepts a parameter list that
+-- follows the name.
+local function call_params(source, name, verbatim, named)
+  local s = source:find(name .. "%s*%(") or (not named and source:find "%(")
+  local open = s and source:find("(", s, true)
+  if not open then return nil end
+  local depth, close = 0, nil
+  for i = open, #source do
+    local c = source:sub(i, i)
+    if c == "(" then
+      depth = depth + 1
+    elseif c == ")" then
+      depth = depth - 1
+      if depth == 0 then
+        close = i
+        break
       end
     end
   end
+  if not close then return nil end
+  local params, understood = {}, true
+  local inner = source:sub(open + 1, close - 1)
+  if inner:match "%S" then
+    understood = false
+    for i, arg in ipairs(split_args(inner:gsub("\n", " "), true)) do
+      local p
+      if verbatim then
+        p = vim.trim(arg) ~= "" and { name = vim.trim(arg) } or nil
+      else
+        p = parse_param(arg)
+      end
+      if p then understood = true end
+      if p and not p.marker and not (i == 1 and (p.name == "self" or p.name == "cls")) then params[#params + 1] = p end
+    end
+  end
+  -- (a parameter list with nothing recognisable in it, like the label `greet(…)`, says nothing)
+  return understood and params or nil
+end
+
+-- Parameters of a completion item, from the first of these that has them:
+--   * the snippet it inserts, when that spells out the arguments: rust-analyzer's `greet(${1:name})$0`, gopls's
+--     `Sprintf(${1:format string}, ${2:a ...any})`, clangd's `add(${1:int a}, ${2:int b})`. None of them puts the
+--     signature in the documentation (the first code block of a Rust item is a usage example). The placeholders
+--     are shown as the server wrote them: whether the name comes first differs per language.
+--   * the signature in the first code block of its documentation (basedpyright; this one has the defaults)
+--   * its detail, where the signature follows the name (vtsls's `function greet(u: User, loud?: boolean): string`,
+--     which also starts with things like `(method) `)
+--   * its label (lua_ls's `nvim_buf_set_lines(buf, start, ...)`)
+local function item_params(item)
+  local name = vim.pesc((item.filterText or item.label):match "^[%w_.:$]+" or "")
+  local snippet = item.insertTextFormat == 2 and (item.textEdit and item.textEdit.newText or item.insertText)
+  -- (a bare tabstop inside the parentheses, `name($0)`, leaves the arguments to be typed: that says nothing)
+  if snippet and not snippet:find "%(%s*%${?%d+}?%s*%)" then
+    local params = call_params(snippet:gsub("%${%d+:([^}]*)}", "%1"):gsub("%${?%d+}?", ""), name, true)
+    if params then return params end
+  end
+  local doc = item.documentation
+  doc = type(doc) == "table" and doc.value or doc or ""
+  local code = doc:match "```[%w_]*\n(.-)\n```"
+  return code and call_params(code, name)
+    or name ~= "" and item.detail and call_params(item.detail, name, false, true)
+    or call_params(item.label, name)
 end
 
 -- an AI suggestion from minuet sits at the same spot; it wins
@@ -258,7 +287,7 @@ local function update_from_menu(buf, cursor, tick)
   end
 
   if resolved[item] ~= nil or item.documentation then
-    resolved[item] = resolved[item] or item_params(item) or false
+    if resolved[item] == nil then resolved[item] = item_params(item) or false end
     display(resolved[item] or nil)
     return true
   end
@@ -285,7 +314,7 @@ local function update_from_call(buf, cursor, tick)
   local params = vim.lsp.util.make_position_params(0, client.offset_encoding)
   client:request("textDocument/signatureHelp", params, function(err, result)
     if err or not still(buf, tick, cursor) then return end
-    show(buf, cursor, call_ghost(result, split_args(text)), false)
+    show(buf, cursor, call_ghost(result, split_args(text), TYPE_FIRST[vim.bo[buf].filetype]), false)
   end, buf)
 end
 

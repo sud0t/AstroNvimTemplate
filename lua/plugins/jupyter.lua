@@ -28,7 +28,11 @@ return {
     "benlubas/molten-nvim",
     version = "^1.0.0", -- stay below 2.0 to avoid breaking changes
     dependencies = { "3rd/image.nvim" },
-    build = ":UpdateRemotePlugins",
+    build = ":UpdateRemotePlugins", -- lazy.nvim loads the plugin first, so `config` has defined the command
+    -- molten is a Python remote plugin: its commands and functions come from the remote plugin manifest, which is
+    -- no longer sourced at startup (`rplugin` is disabled in lazy_setup.lua) but here, when molten is first used
+    cmd = { "MoltenInit", "MoltenInfo", "MoltenLoad", "MoltenImportOutput", "MoltenEvaluateLine" },
+    config = function() vim.cmd "runtime! plugin/rplugin.vim" end,
     init = function()
       vim.g.molten_image_provider = "image.nvim"
       vim.g.molten_virt_text_output = true -- output stays visible under the cell
@@ -39,8 +43,10 @@ return {
       -- the window switches to another filetype)
       vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter" }, {
         group = vim.api.nvim_create_augroup("jupyter_cell_markers", { clear = true }),
-        callback = function(ev)
-          local python = vim.bo[ev.buf].filetype == "python"
+        callback = function()
+          -- the buffer shown in the current window, which is not always the event's buffer (FileType also
+          -- fires for buffers loaded in the background)
+          local python = vim.bo.filetype == "python"
           if python and vim.w.jupyter_cell_hl == nil then
             vim.w.jupyter_cell_hl = vim.fn.matchadd("Folded", [[^# %%.*$]])
           elseif not python and vim.w.jupyter_cell_hl ~= nil then

@@ -4,6 +4,8 @@
 -- Toggled globally with <Leader>Aq (off at startup). While a suggestion is shown in insert mode:
 --   <A-A> accept all, <A-l> accept line, <A-h> un-accept that line, <A-z> accept n lines,
 --   <A-]>/<A-[> next/prev, <A-e> dismiss
+-- <A-e> is also nvim-autopairs' fast wrap key (AstroNvim's default), mapped per buffer, where it won over minuet's
+-- dismiss and left insert mode instead. It still does the fast wrap whenever no suggestion is shown.
 
 local enabled = false
 local model = "qwen2.5-coder:1.5b-base"
@@ -13,6 +15,15 @@ local function set_auto_trigger(buf)
   if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" then
     vim.b[buf].minuet_virtual_text_auto_trigger = enabled
   end
+end
+
+local fast_wrap = "<Plug>(autopairs-fastwrap)"
+
+local function dismiss_or_fast_wrap()
+  local virtualtext = package.loaded["minuet.virtualtext"]
+  if virtualtext and virtualtext.action.is_visible() then return virtualtext.action.dismiss() end
+  -- (an unmapped <Plug> key would type its name into the buffer)
+  if vim.fn.maparg(fast_wrap, "i") ~= "" then vim.api.nvim_feedkeys(vim.keycode(fast_wrap), "m", false) end
 end
 
 local function toggle()
@@ -46,8 +57,10 @@ return {
       opts = function(_, opts)
         -- replaces CodeCompanion's inline prompt (from the community module) on this key
         opts.mappings.n["<Leader>Aq"] = { toggle, desc = "Toggle AI inline completion" }
+        opts.mappings.i["<A-e>"] = { dismiss_or_fast_wrap, desc = "Dismiss AI suggestion / autopairs fast wrap" }
       end,
     },
+    { "windwp/nvim-autopairs", optional = true, opts = { fast_wrap = { map = fast_wrap } } },
   },
   opts = {
     provider = "openai_fim_compatible",
@@ -80,7 +93,7 @@ return {
         accept_n_lines = "<A-z>",
         next = "<A-]>",
         prev = "<A-[>",
-        dismiss = "<A-e>",
+        -- dismiss: <A-e>, shared with autopairs' fast wrap (see `dismiss_or_fast_wrap`)
       },
       show_on_completion_menu = false,
     },

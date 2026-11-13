@@ -23,6 +23,7 @@ require("lazy").setup({
       disabled_plugins = {
         "gzip",
         "netrwPlugin",
+        "rplugin", -- the remote plugin manifest (~2.5ms); molten is the only one and sources it when it loads
         "tarPlugin",
         "tohtml",
         "zipPlugin",

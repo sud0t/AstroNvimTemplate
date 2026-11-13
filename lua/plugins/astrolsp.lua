@@ -41,6 +41,19 @@ return {
       -- ["*"] = { capabilities = {} }, -- modify default LSP client settings such as capabilities
       -- ruff logs its routine INFO/WARN messages to stderr, which ends up in lsp.log as errors
       ruff = { init_options = { settings = { logLevel = "error" } } },
+      -- the same for clangd (it logs every request, tens of thousands of lsp.log lines per session) and taplo
+      clangd = { cmd = { "clangd", "--log=error" } },
+      taplo = {
+        cmd_env = { RUST_LOG = "error" },
+        -- Without a workspace folder taplo treats a file as excluded: a TOML file outside a git repository
+        -- (~/.config/...) got "this document has been excluded" as its only diagnostic and was not formatted.
+        -- Fall back to the file's own directory.
+        root_dir = function(bufnr, on_dir)
+          local root = vim.fs.root(bufnr, { ".taplo.toml", "taplo.toml", ".git" })
+          local name = vim.api.nvim_buf_get_name(bufnr)
+          on_dir(root or (name ~= "" and vim.fs.dirname(name)) or vim.fn.getcwd())
+        end,
+      },
     },
     -- customize how language servers are attached
     handlers = {
@@ -57,24 +70,11 @@ return {
     -- Configure buffer local auto commands to add when attaching a language server
     autocmds = {
       -- first key is the `augroup` to add the auto commands to (:h augroup)
-      lsp_codelens_refresh = {
-        -- Optional condition to create/delete auto command group
-        -- can either be a string of a client capability or a function of `fun(client, bufnr): boolean`
-        -- condition will be resolved for each client on each execution and if it ever fails for all clients,
-        -- the auto commands will be deleted for that buffer
-        cond = "textDocument/codeLens",
-        -- cond = function(client, bufnr) return client.name == "lua_ls" end,
-        -- list of auto commands to set
-        {
-          -- events to trigger
-          event = { "InsertLeave", "BufEnter" },
-          -- the rest of the autocmd options (:h nvim_create_autocmd)
-          desc = "Refresh codelens (buffer)",
-          callback = function(args)
-            if require("astrolsp").config.features.codelens then vim.lsp.codelens.enable(true, { bufnr = args.buf }) end
-          end,
-        },
-      },
+      -- `cond` is a client capability (or a `fun(client, bufnr): boolean`); once it fails for every client of a
+      -- buffer, the auto commands are deleted for that buffer
+      -- (no codelens refresh group here: Neovim 0.12 keeps the lenses current itself once AstroLSP has called
+      -- `vim.lsp.codelens.enable()`, and re-enabling them per buffer on BufEnter/InsertLeave undid <Leader>uL)
+
       -- ghost text with the parameters (and defaults) still missing from the call under the cursor
       signature_ghost = {
         cond = "textDocument/signatureHelp",

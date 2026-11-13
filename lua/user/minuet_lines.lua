@@ -50,7 +50,9 @@ end
 function M.undo()
   local buf = api.nvim_get_current_buf()
   local stack = history[buf]
-  local entry = stack and table.remove(stack)
+  -- without minuet's internals (renamed in an update) the suggestion could not be shown again: leave the line
+  local get_ctx, update_preview = internals()
+  local entry = get_ctx and stack and table.remove(stack)
   if not entry then return end
   local s, f = entry.start, entry.finish
   -- only undo if the inserted text is untouched and the cursor is still right after it
@@ -67,14 +69,11 @@ function M.undo()
   api.nvim_buf_set_text(buf, s[1] - 1, s[2], f[1] - 1, f[2], { "" })
   api.nvim_win_set_cursor(0, s)
 
-  local get_ctx, update_preview = internals()
-  if get_ctx then
-    local ctx = get_ctx(buf)
-    ctx.suggestions, ctx.choice = { entry.suggestion }, 1
-    ctx.shown_choices = {}
-    update_preview(ctx)
-    ctx.shown_choices = {} -- an empty table tells minuet the cursor move below is not "typing past" it
-  end
+  local ctx = get_ctx(buf)
+  ctx.suggestions, ctx.choice = { entry.suggestion }, 1
+  ctx.shown_choices = {}
+  update_preview(ctx)
+  ctx.shown_choices = {} -- an empty table tells minuet the cursor move below is not "typing past" it
   vim.defer_fn(function()
     if api.nvim_buf_is_valid(buf) then vim.b[buf].minuet_virtual_text_auto_trigger = auto end
   end, 50)

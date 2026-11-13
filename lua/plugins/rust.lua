@@ -109,10 +109,18 @@ return {
       -- component (rust-toolchain.toml) falls back to the stable one, since the bare `rust-analyzer` proxy would
       -- only print "Unknown binary 'rust-analyzer' in official toolchain" and no server would start
       opts.server.cmd = function()
-        for _, args in ipairs { "", " --toolchain stable" } do
-          local ra_path = vim.fn.system("rustup which" .. args .. " rust-analyzer"):gsub("%s+$", "")
-          if vim.v.shell_error == 0 and ra_path ~= "" then
-            if args ~= "" and not warned_missing_component then
+        if vim.fn.executable "rustup" == 0 then return { "rust-analyzer" } end -- whatever is on PATH
+        -- rustup picks the toolchain (rust-toolchain.toml, directory overrides) from the directory it runs in:
+        -- ask from the file's directory, Neovim's working directory may be outside the project. This runs
+        -- while the server is started for the current buffer (rustaceanvim's ftplugin).
+        local dir = vim.fs.dirname(vim.api.nvim_buf_get_name(0))
+        local cwd = dir and vim.fn.isdirectory(dir) == 1 and dir or nil
+        for _, toolchain in ipairs { {}, { "--toolchain", "stable" } } do
+          local cmd = vim.list_extend(vim.list_extend({ "rustup", "which" }, toolchain), { "rust-analyzer" })
+          local res = vim.system(cmd, { cwd = cwd, text = true }):wait()
+          local ra_path = vim.trim(res.stdout or "")
+          if res.code == 0 and ra_path ~= "" then
+            if #toolchain > 0 and not warned_missing_component then
               warned_missing_component = true
               vim.notify(
                 "The active toolchain has no rust-analyzer component (rustup component add rust-analyzer); "
@@ -124,7 +132,7 @@ return {
             return { ra_path }
           end
         end
-        return { "rust-analyzer" } -- rustup missing: whatever is on PATH
+        return { "rust-analyzer" } -- not in any toolchain: whatever is on PATH
       end
 
       opts.dap = require("astrocore").extend_tbl(opts.dap, {

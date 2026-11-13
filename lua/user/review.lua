@@ -8,8 +8,10 @@ local M = {}
 
 local model = "qwen3:4b-instruct"
 local url = "http://localhost:11434/api/chat"
--- fits the model's 6k context (~3.5 characters per token) next to the prompt and the answer
-local max_chars = 15000
+-- What fits the model's 6144 token context next to the system prompt (~450 tokens) and the answer: ~4600 tokens
+-- of code, at the ~3 characters per token of dense code. Past the context Ollama silently drops the start.
+local max_chars = 13000
+local num_predict = 1024
 
 local system_prompt = [[
 You review code for an experienced programmer. Output only concrete fixes to the given code.
@@ -90,7 +92,8 @@ end
 --- Small models do not always keep each fix next to its code (some send all the reasons, then one block with the
 --- whole file), so the code blocks are split into functions and matched to the reasons by function name.
 local function parse(text, lang)
-  text = text:gsub("<think>.-</think>", "")
+  -- (the leading newline lets the patterns below find a code fence on the very first line)
+  text = "\n" .. text:gsub("<think>.-</think>", "")
   local header = "%*%*`?([^`*\n]+)`?%*%*:?[ \t]*([^\n]*)"
   local reasons, items = {}, {} -- reasons by function name; headers and code blocks in answer order
   local pos = 1
@@ -394,9 +397,10 @@ function M.run()
 
   local ft, name = vim.bo[bufnr].filetype, vim.fn.expand "%:."
   local scope = visual and ("lines %d-%d of `%s`"):format(first + 1, last + 1, name) or ("the file `%s`"):format(name)
-  local body = vim.json.encode {
+  local request = {
     model = model,
     stream = false,
+    think = false, -- the tag is the non-thinking variant, but Ollama lists the capability and clients may default to it
     keep_alive = "0s", -- unload as soon as it answers, handing the GPU back to completion
     messages = {
       { role = "system", content = system_prompt },
@@ -405,29 +409,55 @@ function M.run()
     options = {
       num_ctx = 6144, -- KV cache is ~75KB/token here; 8k leaves too little VRAM headroom
       temperature = 0.1, -- stick to the format and the code
-      num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places half of them)
-      num_predict = 1024, -- hard cap on answer length; 5 fixed functions fit easily
+      num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places part of them); see `send`
+      num_predict = num_predict, -- hard cap on answer length; 5 fixed functions fit easily
     },
   }
 
-  -- the review model only fits on the GPU on its own; completion reloads afterwards (~1s, once)
-  require("user.ollama").make_room_for(model)
-  notify(("Reviewing %s with %s… (<Leader>AR cancels)"):format(visual and "selection" or "buffer", model))
-  local this
-  this = vim.system({ "curl", "-s", "--max-time", "600", url, "-d", "@-" }, { stdin = body, text = true }, function(res)
-    vim.schedule(function()
-      if job ~= this then return end -- cancelled
-      job = nil
-      require("user.ollama").unload_spilled(model)
-      local ok, data = pcall(vim.json.decode, res.stdout or "")
-      if res.code ~= 0 or not ok or type(data) ~= "table" or not data.message then
-        local err = ok and type(data) == "table" and data.error or res.stderr
-        return notify("Request failed: " .. (err ~= "" and err or "is Ollama running?"), vim.log.levels.ERROR)
+  local starting = { kill = function() end } -- stands in for the request until the GPU has been cleared
+  local send
+
+  local function on_answer(this, res)
+    if job ~= this then return end -- cancelled
+    local ok, data = pcall(vim.json.decode, res.stdout or "")
+    local err = ok and type(data) == "table" and data.error or nil
+    -- With other programs holding VRAM the model does not fit entirely, and forcing all layers makes the load
+    -- fail ("failed to allocate ... buffer") instead of falling back: ask again with Ollama's own placement,
+    -- which keeps some layers on the CPU (slower, but it answers).
+    if type(err) == "string" and request.options.num_gpu and (err:find "alloc" or err:find "terminated") then
+      request.options.num_gpu = nil
+      return send()
+    end
+    job = nil
+    require("user.ollama").unload_spilled(model)
+    if res.code ~= 0 or not ok or type(data) ~= "table" or not data.message then
+      err = err or res.stderr
+      return notify("Request failed: " .. (err and err ~= "" and err or "is Ollama running?"), vim.log.levels.ERROR)
+    end
+    if data.done_reason == "length" then
+      notify("The answer hit the length limit; the last fix may be missing", vim.log.levels.WARN)
+    end
+    M.apply(bufnr, data.message.content or "", { first, last })
+  end
+
+  send = function()
+    local this
+    this = vim.system(
+      { "curl", "-s", "--max-time", "600", url, "-d", "@-" },
+      { stdin = vim.json.encode(request), text = true },
+      function(res)
+        vim.schedule(function() on_answer(this, res) end)
       end
-      M.apply(bufnr, data.message.content or "", { first, last })
-    end)
+    )
+    job = this
+  end
+
+  notify(("Reviewing %s with %s… (<Leader>AR cancels)"):format(visual and "selection" or "buffer", model))
+  -- the review model only fits on the GPU on its own; completion reloads afterwards (~1s, once)
+  job = starting
+  require("user.ollama").make_room_for(model, function()
+    if job == starting then send() end -- not cancelled meanwhile
   end)
-  job = this
 end
 
 return M

@@ -44,9 +44,17 @@ M.greek = greek
 local display_zones =
   { texMathZoneLD = true, texMathZoneTD = true, texMathZoneEnv = true, texMathZoneEnvStarred = true }
 
+-- vimtex answers from synstack(), which comes back empty the first time it is asked after several characters went
+-- into the line with no redraw in between (keys typed faster than the screen updates, a paste, a macro): `sum` typed
+-- quickly stayed `sum`. Asked again it has the syntax state, so a "no" is only taken on the second answer.
+local function in_mathzone(...)
+  local in_zone = vim.fn["vimtex#syntax#in_mathzone"]
+  return in_zone(...) == 1 or in_zone(...) == 1
+end
+
 -- innermost math zone syntax group at the cursor, nil outside math (and inside \text{} in math)
 local function math_zone()
-  if vim.fn["vimtex#syntax#in_mathzone"]() ~= 1 then return nil end
+  if not in_mathzone() then return nil end
   local stack = vim.fn["vimtex#syntax#stack"]()
   for k = #stack, 1, -1 do
     if stack[k]:match "^texMathZone" then return stack[k] end
@@ -67,7 +75,7 @@ M.in_math = in_math
 function M.in_math_at(row, col)
   -- in insert mode vimtex#syntax#stack looks one column left (the character before the cursor)
   if vim.fn.mode() == "i" then col = col + 1 end
-  return vim.fn["vimtex#syntax#in_mathzone"](row, col) == 1
+  return in_mathzone(row, col)
 end
 
 -- the macro list is sorted once so a prefix check is a binary search

@@ -14,29 +14,39 @@ local moved = { -- community key -> key here
 -- The community module's snacks picker integration (<C-t> in a picker sends the results to trouble) reads
 -- require("trouble.sources.snacks").actions while snacks is set up at startup, which loaded trouble on every
 -- start (~2.5ms). This stand-in provides the same actions and loads the real module only when one is used.
+-- trouble itself also requires the module when it registers its sources (`:Trouble ...`) and would get the
+-- stand-in back, so every other field (config, get, ...) is forwarded to the real module as well.
 local function lazy_snacks_actions()
   local name = "trouble.sources.snacks"
-  local function real(action)
-    return function(...)
+  local source
+  local function real()
+    if not source then
       package.preload[name], package.loaded[name] = nil, nil
-      return require(name).actions[action].action(...)
+      source = require(name)
     end
+    return source
+  end
+  local function action(action_name)
+    return function(...) return real().actions[action_name].action(...) end
   end
   package.preload[name] = function()
-    return {
+    return setmetatable({
       actions = {
-        trouble_open = { action = real "trouble_open", desc = "smart-open-with-trouble" },
-        trouble_open_selected = { action = real "trouble_open_selected", desc = "open-with-trouble" },
-        trouble_open_all = { action = real "trouble_open_all", desc = "open-all-with-trouble" },
+        trouble_open = { action = action "trouble_open", desc = "smart-open-with-trouble" },
+        trouble_open_selected = { action = action "trouble_open_selected", desc = "open-with-trouble" },
+        trouble_open_all = { action = action "trouble_open_all", desc = "open-all-with-trouble" },
       },
-    }
+    }, { __index = function(_, key) return real()[key] end })
   end
 end
+
+-- Installed while lazy.nvim reads this file, not from the plugin's `init`: the snacks opts are already resolved
+-- during another plugin's `init` (mason-tool-installer asks AstroCore for them), which can run before this one.
+lazy_snacks_actions()
 
 ---@type LazySpec
 return {
   "folke/trouble.nvim",
-  init = lazy_snacks_actions, -- runs before snacks (a startup plugin) is set up
   specs = {
     {
       "AstroNvim/astrocore",

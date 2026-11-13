@@ -22,12 +22,40 @@ return {
     "mfussenegger/nvim-dap-python",
     ft = function() return {} end, -- drop the pack's `ft = "python"` trigger
   },
+  -- The same for JavaScript/TypeScript: deno-nvim (typescript pack, loaded on those filetypes) ends its setup with
+  -- `if pcall(require, "dap")`, to register its `pwa-node` debug adapter, and that require made lazy.nvim load the
+  -- whole debugger stack (~40ms on the first JS/TS file). `require "dap"` is made to fail during that setup, and
+  -- the adapter is registered when nvim-dap really loads (in its `config` below).
+  {
+    "sigmasd/deno-nvim",
+    optional = true,
+    opts = function(_, opts)
+      -- the adapter has no `args` by default ("needs to be set"): point it at Mason's js-debug-adapter
+      -- (not $MASON: on the first file of a session this runs before Mason is set up)
+      local server = vim.fn.stdpath "data" .. "/mason/packages/js-debug-adapter/js-debug/src/dapDebugServer.js"
+      if vim.fn.filereadable(server) == 1 then
+        opts.dap = require("astrocore").extend_tbl(opts.dap, {
+          adapter = { executable = { args = { server, "${port}" } } },
+        })
+      end
+    end,
+    config = function(_, opts)
+      local deno = require "deno-nvim"
+      if package.loaded["dap"] then return deno.setup(opts) end
+      package.preload["dap"] = function() error "nvim-dap is loaded on demand" end
+      local ok, err = pcall(deno.setup, opts)
+      -- (a failed require leaves a marker in package.loaded that would make every later `require "dap"` fail)
+      package.preload["dap"], package.loaded["dap"] = nil, nil
+      if not ok then error(err, 0) end
+    end,
+  },
   {
     "mfussenegger/nvim-dap",
     optional = true,
     dependencies = { "mfussenegger/nvim-dap-python" },
     config = function()
       require "astronvim.plugins.configs.nvim-dap"() -- AstroNvim's own setup (launch.json parsing)
+      if package.loaded["deno-nvim"] then require("deno-nvim.dap").setup_adapter() end
 
       -- Lua scripts (lua / luajit), with local-lua-debugger-vscode from Mason. Nothing provides Lua debugging
       -- by default; this is for standalone scripts, not for Lua running inside Neovim.
@@ -73,19 +101,50 @@ return {
       -- the console pane is gone before it can be read. Keep the UI open when the program exits on its own, and
       -- close it only when the session was stopped by hand (<Leader>dq, <Leader>dQ, Shift+F5).
       local stopped_by_user = setmetatable({}, { __mode = "k" }) -- session -> true
-      for _, request in ipairs { "terminate", "disconnect" } do
-        dap.listeners.before[request].dapui_config = function(session) stopped_by_user[session] = true end
+      local function mark(session)
+        if not session or stopped_by_user[session] then return end
+        stopped_by_user[session] = true
+        for _, child in pairs(session.children or {}) do
+          mark(child)
+        end
+      end
+      local function mark_all()
+        mark(dap.session())
+        for _, session in pairs(dap.sessions()) do
+          mark(session)
+        end
+      end
+      -- Marked when the function is called, not from a `listeners.before.terminate`: request listeners run once the
+      -- adapter has answered, and debugpy and delve send `exited` before they answer `terminate`.
+      for _, name in ipairs { "terminate", "disconnect" } do
+        local stop = dap[name]
+        dap[name] = function(...)
+          mark_all()
+          return stop(...)
+        end
+      end
+      local restart_session = dap.restart
+      dap.restart = function(...)
+        -- an adapter without a restart request is terminated and launched again as a new session
+        local session = dap.session()
+        if session and not session.capabilities.supportsRestartRequest then mark_all() end
+        return restart_session(...)
       end
       local close = dap.close
       dap.close = function(...)
-        local session = dap.session()
-        if session then stopped_by_user[session] = true end
+        mark_all()
         local result = close(...)
         dapui.close() -- dap.close() ends the session without the adapter sending `terminated`
         return result
       end
       dap.listeners.before.event_terminated.dapui_config = function(session)
         if stopped_by_user[session] then dapui.close() end
+      end
+      -- (not every adapter sends `terminated` or `exited` when it is told to stop: bash-debug-adapter only answers)
+      for _, request in ipairs { "terminate", "disconnect" } do
+        dap.listeners.after[request].dapui_config = function(session)
+          if stopped_by_user[session] then dapui.close() end
+        end
       end
       dap.listeners.before.event_exited.dapui_config = function(session, body)
         if stopped_by_user[session] then return dapui.close() end
@@ -105,6 +164,18 @@ return {
     optional = true,
     opts = function(_, opts)
       opts.handlers = opts.handlers or {}
+      -- bash-debug-adapter: the default configuration runs bashdb in the "integrated" terminal, which nvim-dap
+      -- starts as a direct child of Neovim. When the session ends the adapter cleans up with
+      -- `pkill -KILL -P <bashdb's parent>` (a terminal's shell in VS Code), which here is Neovim itself: every
+      -- language server and terminal job got killed with it. In the debug console the adapter starts bashdb under
+      -- its own shell; the script's output goes to the dap-ui REPL pane (a script cannot read stdin this way).
+      opts.handlers.bash = function(config)
+        config = vim.deepcopy(config)
+        for _, c in ipairs(config.configurations or {}) do
+          c.terminalKind = "debugConsole"
+        end
+        require("mason-nvim-dap").default_setup(config)
+      end
       -- codelldb (C/C++): by default the REPL (<Leader>dR) and <Leader>dE treat input as LLDB commands, so typing
       -- a variable name such as `x` ran LLDB's memory-read command. Evaluate expressions instead; LLDB commands
       -- still work with a ` prefix (e.g. `bt).
