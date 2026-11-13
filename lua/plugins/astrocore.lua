@@ -58,6 +58,8 @@ return {
       n = {
         -- Precognition toggle
         ["<Leader>ue"] = { "<Cmd>Precognition toggle<CR>", desc = "Toggle precognition" },
+        -- Cheat sheet of the keys that are not behind <Leader> (user/cheatsheet.lua)
+        ["<Leader>k"] = { function() require("user.cheatsheet").open() end, desc = "Keys cheat sheet (non-leader)" },
         -- Fold open / fold close
         ["<Leader>C"] = false,
         ["<Leader>c"] = { false, desc = "Folds close/open" }, -- `false` drops AstroNvim's close buffer, keeping only the group

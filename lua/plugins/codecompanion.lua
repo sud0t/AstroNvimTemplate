@@ -6,7 +6,8 @@
 -- num_ctx is kept at 8k: enough for a ~600 line file, while the KV cache stays small enough
 -- to leave most layers on the GPU (inline completion lives in plugins/minuet.lua).
 -- <Leader>AR (review and fix in place) lives in lua/user/review.lua and talks to Ollama directly.
--- <Leader>Ac writes a commit message for the current diff ("Commit message" in the prompt library below).
+-- <Leader>Ac writes a commit message for the current diff: straight into the buffer when committing, in a chat
+-- otherwise (lua/user/commit.lua; the chat is "Commit message" in the prompt library below).
 
 ---@type LazySpec
 return {
@@ -82,22 +83,16 @@ return {
           auto_submit = true,
           ignore_system_prompt = true, -- the general chat instructions only take context away from the diff
           stop_context_insertion = true,
-          -- The right model of the ones installed: reading a diff and summarising it in prose is an instruct
-          -- task, and qwen3:4b-instruct is the only one that mostly fits on the GPU (the 7b/8b models run at
-          -- half its speed). Named here so the prompt keeps it even if the chat default changes.
-          adapter = { name = "ollama", model = "qwen3:4b-instruct" },
+          -- named here so the prompt keeps its model even if the chat default changes
+          adapter = { name = "ollama", model = require("user.commit").model },
         },
         prompts = {
           {
             role = "system",
-            content = [[
-You write git commit messages. You are given the list of changed files, recent commit subjects of the repository and the diff.
-
-Rules:
-- First line: a summary of at most 60 characters, imperative mood, no trailing period. Follow the style of the recent commit subjects (prefixes, capitalisation); do not add a "feat:"/"fix:" prefix unless they use one.
-- If the change needs explaining, add a blank line and then a short body: what changed and why, as plain sentences or "- " bullets, wrapped at 72 characters. Leave the body out for small changes.
-- Describe only what the diff shows. Do not invent reasons, do not mention files that did not change, do not describe the diff line by line.
-- Reply with the commit message inside one ``` code block and nothing else.]],
+            content = function()
+              return require("user.commit").instructions
+                .. "\n- Reply with the commit message inside one ``` code block and nothing else."
+            end,
           },
           { role = "user", content = function() return require("user.commit").prompt() end },
         },
