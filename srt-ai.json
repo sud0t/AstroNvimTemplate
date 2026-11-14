@@ -1,0 +1,40 @@
+{
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": [
+      "~/Private",
+      "~/.local/share/keyrings",
+      "~/.config/keepassxc",
+      "~/.local/state/keepassxc",
+      "~/.config/librewolf",
+      "~/.config/mozilla",
+      "~/.mozilla",
+      "~/.config/google-chrome",
+      "~/.local/state/noctalia",
+      "~/.ssh",
+      "~/.gnupg",
+      "~/.claude/.credentials.json",
+      "/tmp/dbus-*",
+      "/tmp/.X11-unix",
+      "/run/user/1000"
+    ],
+    "allowRead": [],
+    "allowWrite": ["."],
+    "denyWrite": [
+      "~/.config/nvim/srt-ai.json",
+      "~/.config/nvim/lua/user/ai_sandbox.lua",
+      "~/.config/nvim/lua/plugins/codecompanion.lua",
+      "~/.claude/settings.json"
+    ]
+  },
+  "credentials": {
+    "envVars": [
+      { "name": "DBUS_SESSION_BUS_ADDRESS", "mode": "deny" },
+      { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
+      { "name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny" }
+    ]
+  }
+}

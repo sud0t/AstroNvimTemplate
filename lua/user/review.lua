@@ -1,17 +1,19 @@
--- <Leader>AR: review the buffer (or the visual selection) with a local model and apply its fixes in place.
--- The model (qwen3:4b-instruct, fits entirely in the T1000's VRAM) answers with whole fixed functions; each one
+-- <Leader>AR: review the buffer (or the visual selection) and apply the fixes in place, with the AI chosen with
+-- <Leader>As: the local model (qwen3:4b-instruct, fits entirely in the T1000's VRAM) or Claude.
+-- The model answers with whole fixed functions; each one
 -- replaces its function in the buffer and is shown as an inline diff (CodeCompanion's diff UI), one fix at a
 -- time, with the reason in the banner:
 --   g2  accept this fix      g3  reject it (restores the code)      g1  accept this and all remaining fixes
+-- While the model answers, what it writes is shown live in a small window in the bottom right corner.
 -- <Leader>AR while the model is still answering cancels the review.
 local M = {}
 
 local model = "qwen3:4b-instruct"
-local url = "http://localhost:11434/api/chat"
 -- What fits the model's 6144 token context next to the system prompt (~450 tokens) and the answer: ~4600 tokens
 -- of code, at the ~3 characters per token of dense code. Past the context Ollama silently drops the start.
-local max_chars = 13000
-local num_predict = 1024
+-- Claude takes whole files.
+local max_chars, max_chars_claude = 13000, 400000
+local num_predict, num_predict_claude = 1024, 16000
 
 local system_prompt = [[
 You review code for an experienced programmer. Output only concrete fixes to the given code.
@@ -43,7 +45,9 @@ If the code has none of these problems, reply with just "No changes needed."]]
 local job -- running request
 local session -- fixes waiting for accept/reject
 
-local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "AI review", id = "ai_review" }) end
+local function notify(msg, level)
+  vim.notify(msg, level or vim.log.levels.INFO, { title = "AI review", id = "ai_review" })
+end
 
 ---------------------------------------------------------------------------------------------------- parsing
 
@@ -110,7 +114,10 @@ local function parse(text, lang)
         offending = text:sub(he, (text:find("\n%s*\n", he) or #text)):match ">[ \t]*`(.-)`",
       }
       table.insert(items, h)
-      if h.name then reasons[h.name] = reasons[h.name] or {} table.insert(reasons[h.name], h) end
+      if h.name then
+        reasons[h.name] = reasons[h.name] or {}
+        table.insert(reasons[h.name], h)
+      end
       pos = he + 1
     else
       local cs, ce = text:find("\n[ \t]*" .. fence, fe)
@@ -258,8 +265,12 @@ local function reindent(code, target)
     out[i] = l
   end
   -- drop blank lines the model added around the code
-  while out[1] == "" do table.remove(out, 1) end
-  while out[#out] == "" do table.remove(out) end
+  while out[1] == "" do
+    table.remove(out, 1)
+  end
+  while out[#out] == "" do
+    table.remove(out)
+  end
   return out
 end
 
@@ -270,7 +281,9 @@ local function finish()
   session = nil
   if not s then return end
   local msg = ("%d of %d fixes applied"):format(s.accepted, #s.fixes)
-  if #s.skipped > 0 then msg = msg .. "\nSkipped (could not place in the buffer):\n" .. table.concat(s.skipped, "\n") end
+  if #s.skipped > 0 then
+    msg = msg .. "\nSkipped (could not place in the buffer):\n" .. table.concat(s.skipped, "\n")
+  end
   notify(msg, #s.skipped > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
 end
 
@@ -344,7 +357,11 @@ local function start(bufnr, fixes, range)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   fixes = vim.tbl_filter(function(fix)
     local srow, erow = locate(bufnr, lines, fix, range)
-    return not srow or not vim.deep_equal(reindent(fix.code, vim.list_slice(lines, srow + 1, erow)), vim.list_slice(lines, srow + 1, erow))
+    return not srow
+      or not vim.deep_equal(
+        reindent(fix.code, vim.list_slice(lines, srow + 1, erow)),
+        vim.list_slice(lines, srow + 1, erow)
+      )
   end, fixes)
   if #fixes == 0 then return notify "No changes needed." end
   session = { bufnr = bufnr, fixes = fixes, range = range, index = 0, accepted = 0, skipped = {} }
@@ -372,7 +389,7 @@ end
 
 function M.run()
   if job then
-    job:kill "sigterm"
+    job.cancel()
     job = nil
     return notify "Review cancelled"
   end
@@ -384,13 +401,18 @@ function M.run()
   local visual = vim.fn.mode():match "^[vV\22]"
   if visual then
     first, last = vim.fn.line "v" - 1, vim.fn.line "." - 1
-    if first > last then first, last = last, first end
+    if first > last then
+      first, last = last, first
+    end
     vim.cmd.normal { "\27", bang = true }
   end
   local code = table.concat(vim.api.nvim_buf_get_lines(bufnr, first, last + 1, false), "\n")
-  if #code > max_chars then
+  local ai = require "user.ai"
+  local is_local = ai.is_local()
+  local limit = is_local and max_chars or max_chars_claude
+  if #code > limit then
     return notify(
-      ("Too large for the local model (%d chars, max ~%d). Select a region and try again."):format(#code, max_chars),
+      ("Too large for %s (%d chars, max ~%d). Select a region and try again."):format(ai.label(), #code, limit),
       vim.log.levels.WARN
     )
   end
@@ -398,61 +420,60 @@ function M.run()
   local ft, name = vim.bo[bufnr].filetype, vim.fn.expand "%:."
   local scope = visual and ("lines %d-%d of `%s`"):format(first + 1, last + 1, name) or ("the file `%s`"):format(name)
   local request = {
-    model = model,
-    stream = false,
-    think = false, -- the tag is the non-thinking variant, but Ollama lists the capability and clients may default to it
-    keep_alive = "0s", -- unload as soon as it answers, handing the GPU back to completion
-    messages = {
-      { role = "system", content = system_prompt },
-      { role = "user", content = ("Review %s:\n\n````%s\n%s\n````"):format(scope, ft, code) },
-    },
-    options = {
-      num_ctx = 6144, -- KV cache is ~75KB/token here; 8k leaves too little VRAM headroom
-      temperature = 0.1, -- stick to the format and the code
-      num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places part of them); see `send`
-      num_predict = num_predict, -- hard cap on answer length; 5 fixed functions fit easily
+    system = system_prompt,
+    messages = { { role = "user", content = ("Review %s:\n\n````%s\n%s\n````"):format(scope, ft, code) } },
+    max_tokens = is_local and num_predict or num_predict_claude, -- (local: 5 fixed functions fit easily)
+    ollama = {
+      keep_alive = "0s", -- unload as soon as it answers, handing the GPU back to completion
+      options = {
+        num_ctx = 6144, -- KV cache is ~75KB/token here; 8k leaves too little VRAM headroom
+        temperature = 0.1, -- stick to the format and the code
+        num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places part of them); see `send`
+      },
     },
   }
 
-  local starting = { kill = function() end } -- stands in for the request until the GPU has been cleared
+  local starting = { cancel = function() end } -- stands in for the request until the GPU has been cleared
+  local stream = require "user.ai_stream"
   local send
 
-  local function on_answer(this, res)
-    if job ~= this then return end -- cancelled
-    local ok, data = pcall(vim.json.decode, res.stdout or "")
-    local err = ok and type(data) == "table" and data.error or nil
+  local function on_answer(this, answer, info, float)
+    float.close()
+    if job ~= this.handle then return end -- cancelled
+    local err = info.error
     -- With other programs holding VRAM the model does not fit entirely, and forcing all layers makes the load
     -- fail ("failed to allocate ... buffer") instead of falling back: ask again with Ollama's own placement,
     -- which keeps some layers on the CPU (slower, but it answers).
-    if type(err) == "string" and request.options.num_gpu and (err:find "alloc" or err:find "terminated") then
-      request.options.num_gpu = nil
+    if is_local and err and request.ollama.options.num_gpu and (err:find "alloc" or err:find "terminated") then
+      request.ollama.options.num_gpu = nil
       return send()
     end
     job = nil
-    require("user.ollama").unload_spilled(model)
-    if res.code ~= 0 or not ok or type(data) ~= "table" or not data.message then
-      err = err or res.stderr
-      return notify("Request failed: " .. (err and err ~= "" and err or "is Ollama running?"), vim.log.levels.ERROR)
-    end
-    if data.done_reason == "length" then
+    if is_local then require("user.ollama").unload_spilled(model) end
+    if err then return notify("Request failed: " .. err, vim.log.levels.ERROR) end
+    if info.done_reason == "length" then
       notify("The answer hit the length limit; the last fix may be missing", vim.log.levels.WARN)
     end
-    M.apply(bufnr, data.message.content or "", { first, last })
+    M.apply(bufnr, answer, { first, last })
   end
 
   send = function()
-    local this
-    this = vim.system(
-      { "curl", "-s", "--max-time", "600", url, "-d", "@-" },
-      { stdin = vim.json.encode(request), text = true },
-      function(res)
-        vim.schedule(function() on_answer(this, res) end)
-      end
-    )
-    job = this
+    -- the answer is shown in a corner window while it is written; the fixes in it are applied when it is complete
+    local float = stream.float "AI review"
+    local this = {}
+    this.handle = ai.chat(request, function(text)
+      if job == this.handle then float.update(text) end
+    end, function(answer, info) on_answer(this, answer, info, float) end)
+    job = this.handle
+    local cancel = job.cancel
+    job.cancel = function()
+      float.close()
+      cancel()
+    end
   end
 
-  notify(("Reviewing %s with %s… (<Leader>AR cancels)"):format(visual and "selection" or "buffer", model))
+  notify(("Reviewing %s with %s… (<Leader>AR cancels)"):format(visual and "selection" or "buffer", ai.label()))
+  if not is_local then return send() end
   -- the review model only fits on the GPU on its own; completion reloads afterwards (~1s, once)
   job = starting
   require("user.ollama").make_room_for(model, function()

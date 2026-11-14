@@ -1,6 +1,8 @@
--- <Leader>Ac: write a commit message for the current changes with the local model.
+-- <Leader>Ac: write a commit message for the current changes, with the AI chosen with <Leader>As (local model
+-- or Claude).
 --   In the editor `git commit` opens (COMMIT_EDITMSG): the message for the whole commit is written straight into
---   the buffer, above git's comment lines. `u` takes it out again; pressing the key again writes another one.
+--   the buffer as the model writes it, above git's comment lines. `u` takes it out again; pressing the key
+--   again writes another one (or cancels the one being written).
 --   Anywhere else: a CodeCompanion chat answers with the message in a code block (`gy` yanks it) and stays open
 --   to ask for changes ("shorter", "mention the config change", ...). It describes the staged diff of the
 --   repository the current file is in, or everything changed in the working tree when nothing is staged.
@@ -21,8 +23,9 @@ Rules:
 - Stop after the first line when it says everything. Only when the commit contains several distinct changes, add a blank line and at most four "- " bullets, one per change, each under 72 characters.
 - Describe only what the diff shows. Do not invent reasons, do not mention files that did not change.]]
 
--- What fits the model's 8k context next to the instructions and the answer (~3 characters per token for diffs)
-local max_diff_chars = 18000
+-- What fits the local model's 8k context next to the instructions and the answer (~3 characters per token for
+-- diffs); Claude (<Leader>As) takes far more
+local function max_diff_chars() return require("user.ai").is_local() and 18000 or 300000 end
 -- generated files: they are in the summary of changed files, their content only crowds out the real changes
 local noise = { ":(exclude)*.lock", ":(exclude)*-lock.json", ":(exclude)*.lock.json", ":(exclude)*.min.js" }
 
@@ -53,7 +56,8 @@ end
 --- A diff that is too long, cut down so that every file is still in it: small files whole, and the long ones
 --- share what is left (cutting the end off instead would leave the last files of the commit out entirely).
 local function fit(diff)
-  if #diff <= max_diff_chars then return diff, false end
+  local max = max_diff_chars()
+  if #diff <= max then return diff, false end
   local files = vim.split("\n" .. diff, "\ndiff --git ", { plain = true })
   table.remove(files, 1)
   local order = {}
@@ -62,7 +66,7 @@ local function fit(diff)
     order[i] = i
   end
   table.sort(order, function(a, b) return #files[a] < #files[b] end)
-  local left = max_diff_chars
+  local left = max
   for n, i in ipairs(order) do
     local share = math.floor(left / (#order - n + 1))
     if #files[i] > share then
@@ -144,11 +148,13 @@ function M.prompt()
   return table.concat(parts, "\n")
 end
 
---- The message out of the model's answer: without code fences, reasoning or surrounding blank lines.
+--- The message out of the model's answer (also a partial one, while it is being written): without code
+--- fences, reasoning or surrounding blank lines.
 local function clean(text)
   text = text:gsub("<think>.-</think>", ""):gsub("\r", "")
-  local fenced = ("\n" .. text):match "\n```[^\n]*\n(.-)\n```"
-  local lines = vim.split(vim.trim(fenced or text), "\n", { plain = true })
+  local lines = vim.split(vim.trim(text), "\n", { plain = true })
+  if lines[1]:find "^```" then table.remove(lines, 1) end
+  if lines[#lines] and lines[#lines]:find "^```%s*$" then table.remove(lines) end
   for i, line in ipairs(lines) do
     lines[i] = line:gsub("%s+$", "")
   end
@@ -159,74 +165,66 @@ end
 
 local writing = {} -- bufnr -> the request that is running for it
 
---- Write the message for the commit into its COMMIT_EDITMSG buffer.
+--- Write the message for the commit into its COMMIT_EDITMSG buffer, as the model writes it.
 local function write(bufnr, found)
-  if writing[bufnr] then
-    return vim.notify("Already writing a message", vim.log.levels.INFO, { title = "Commit message" })
-  end
   local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Commit message" }) end
+  if writing[bufnr] then
+    writing[bufnr].cancel()
+    writing[bufnr] = nil
+    return notify "Cancelled"
+  end
+  local ai = require "user.ai"
+  local is_local = ai.is_local()
   changes = found
   local request = {
-    model = M.model,
-    stream = false,
-    think = false,
-    keep_alive = "5m", -- as the CodeCompanion chat: the two share the loaded model
-    options = { num_ctx = 8192, temperature = 0.2, num_predict = 320 },
-    messages = {
-      {
-        role = "system",
-        content = M.instructions .. "\n- Reply with the commit message only: no code block, no explanation.",
-      },
-      { role = "user", content = M.prompt() },
-    },
+    system = M.instructions .. "\n- Reply with the commit message only: no code block, no explanation.",
+    messages = { { role = "user", content = M.prompt() } },
+    max_tokens = is_local and 320 or 4000,
+    -- keep_alive as the CodeCompanion chat: the two share the loaded model
+    ollama = { keep_alive = "5m", options = { num_ctx = 8192, temperature = 0.2 } },
   }
   changes = nil
-  notify "Writing the message for this commit..."
-  local send
-  local function receive(res, retried)
-    local ok, data = pcall(vim.json.decode, res.stdout or "")
-    if res.code ~= 0 or not ok or type(data) ~= "table" then
-      return notify("No answer from Ollama (is it running?)", vim.log.levels.ERROR)
-    end
-    if data.error then return notify("Ollama: " .. tostring(data.error), vim.log.levels.ERROR) end
-    local answer = vim.tbl_get(data, "message", "content") or ""
-    local lines = clean(answer)
-    if lines[1] == nil or lines[1] == "" then return notify("The model gave no message", vim.log.levels.WARN) end
-    -- A commit with many changes tempts the model to list them all in the first line. Ask once for a shorter
-    -- one, with the rest of the conversation (the diff is already evaluated, so this takes a few seconds).
-    if #lines[1] > 72 and not retried then
-      vim.list_extend(request.messages, {
-        { role = "assistant", content = answer },
-        {
-          role = "user",
-          content = (
-            "The first line is %d characters long. Rewrite the message: a first line of at most 60 "
-            .. "characters that names the main change, and the other changes as a few short bullets below it."
-          ):format(#lines[1]),
-        },
-      })
-      return send(true)
-    end
-    if not vim.api.nvim_buf_is_loaded(bufnr) then return end
-    -- replaces what is above git's comments: an earlier attempt, or the empty line git starts with
-    local _, count = message_lines(bufnr)
-    if count < vim.api.nvim_buf_line_count(bufnr) then table.insert(lines, "") end
-    vim.api.nvim_buf_set_lines(bufnr, 0, count, false, lines)
-    for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
-      vim.api.nvim_win_set_cursor(win, { 1, 0 })
-    end
-    notify(found.truncated and "Done (the diff was long: check that nothing is missing)" or "Done")
+
+  local stream = require "user.ai_stream"
+  -- replaces what is above git's comments: an earlier attempt, or the empty line git starts with
+  local _, count = message_lines(bufnr)
+  local comments_follow = count < vim.api.nvim_buf_line_count(bufnr)
+  local region = stream.region(bufnr, 0, count)
+  local function show(text)
+    local lines = clean(text)
+    if comments_follow then table.insert(lines, "") end
+    region:set(lines)
   end
-  send = function(retried)
-    writing[bufnr] = vim.system(
-      { "curl", "-s", "--max-time", "300", "http://localhost:11434/api/chat", "-d", "@-" },
-      { text = true, stdin = vim.json.encode(request) },
-      vim.schedule_wrap(function(res)
-        writing[bufnr] = nil
-        receive(res, retried)
-        if not writing[bufnr] then require("user.ollama").unload_spilled(M.model) end
-      end)
-    )
+
+  notify(("Writing the message for this commit with %s... (<Leader>Ac cancels)"):format(ai.label()))
+  local function send(retried)
+    writing[bufnr] = ai.chat(request, show, function(answer, info)
+      writing[bufnr] = nil
+      local lines = clean(answer)
+      -- A commit with many changes tempts the model to list them all in the first line. Ask once for a shorter
+      -- one, with the rest of the conversation (the diff is already evaluated, so this takes a few seconds).
+      if not info.error and #lines[1] > 72 and not retried then
+        vim.list_extend(request.messages, {
+          { role = "assistant", content = answer },
+          {
+            role = "user",
+            content = (
+              "The first line is %d characters long. Rewrite the message: a first line of at most 60 "
+              .. "characters that names the main change, and the other changes as a few short bullets below it."
+            ):format(#lines[1]),
+          },
+        })
+        return send(true)
+      end
+      region:release()
+      if is_local then require("user.ollama").unload_spilled(M.model) end
+      if info.error then return notify("Request failed: " .. info.error, vim.log.levels.ERROR) end
+      if lines[1] == "" then return notify("The model gave no message", vim.log.levels.WARN) end
+      for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+        vim.api.nvim_win_set_cursor(win, { 1, 0 })
+      end
+      notify(found.truncated and "Done (the diff was long: check that nothing is missing)" or "Done")
+    end)
   end
   send(false)
 end
