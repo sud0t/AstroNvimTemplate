@@ -42,7 +42,7 @@ local function toggle()
   else
     require("minuet.virtualtext").action.dismiss()
     -- free the completion model's VRAM now instead of after Ollama's 30 min keep-alive
-    require("user.ollama").unload(model, function() end)
+    require("user.ai.ollama").unload(model, function() end)
   end
   vim.notify("AI inline completion " .. (enabled and "enabled" or "disabled"))
 end
@@ -100,17 +100,17 @@ return {
   },
   config = function(_, opts)
     require("minuet").setup(opts)
-    -- line by line stepping with undo (lua/user/minuet_lines.lua)
+    -- line by line stepping with undo (lua/user/ai/minuet_lines.lua)
     vim.keymap.set(
       "i",
       "<A-l>",
-      function() require("user.minuet_lines").accept() end,
+      function() require("user.ai.minuet_lines").accept() end,
       { desc = "Accept suggestion line" }
     )
     vim.keymap.set(
       "i",
       "<A-h>",
-      function() require("user.minuet_lines").undo() end,
+      function() require("user.ai.minuet_lines").undo() end,
       { desc = "Un-accept suggestion line" }
     )
   end,

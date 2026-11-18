@@ -1,67 +1,29 @@
--- The two ways the AI features reach Claude (lua/user/ai.lua picks one), both streaming the answer:
+-- The two ways the AI features reach Claude (lua/user/ai/init.lua picks one), both streaming the answer:
 --   M.cli   through Claude Code (`claude -p`): uses the login of the `claude` command, so a Claude subscription
 --           and no API key. No tools, no project settings: it only answers the prompt it is given.
 --   M.api   the Anthropic API with an API key (billed per token).
 -- A request is { system, messages = { { role, content }, ... }, max_tokens }. Both functions call
 -- `on_text(text)` with the whole answer so far each time it has grown and `on_done(text, info)` once at the end
 -- (`info.error`, `info.done_reason == "length"` when cut off), on the main loop, and return a handle with
--- `cancel()`, as M.chat in lua/user/ai_stream.lua does.
+-- `cancel()`, as M.chat in lua/user/ai/stream.lua does (`run` there is what the two share).
 local M = {}
 
+-- `note` is shown next to the model in <Leader>As; `api_note` only where it is billed per token (the API key)
 M.models = {
+  fable = {
+    id = "claude-fable-5-2",
+    name = "Claude Fable 5.2",
+    note = "most capable",
+    api_note = "twice Opus's price per token",
+  },
   opus = { id = "claude-opus-5-5", name = "Claude Opus 5.5" },
-  sonnet = { id = "claude-sonnet-5-5", name = "Claude Sonnet 5.5" },
-  haiku = { id = "claude-haiku-5-5", name = "Claude Haiku 5.5" },
+  sonnet = { id = "claude-sonnet-5-5", name = "Claude Sonnet 5.5", note = "faster" },
+  haiku = { id = "claude-haiku-5-5", name = "Claude Haiku 5.5", note = "fastest" },
 }
+-- the order they are listed in
+M.order = { "fable", "opus", "sonnet", "haiku" }
 
---- Run `cmd`, feed it `stdin`, and hand every complete line of its output to `take`. `finish(res)` decides what
---- the end of the process means. The shared part of the two backends.
-local function stream(cmd, opts, take, on_text, finish, on_done)
-  local state = { text = "", info = {} }
-  local pending, cancelled, queued = "", false, false
-
-  function state.add(piece)
-    state.text = state.text .. piece
-    if queued then return end
-    queued = true
-    vim.schedule(function()
-      queued = false
-      if not cancelled then on_text(state.text) end
-    end)
-  end
-
-  opts.text = true
-  opts.stdout = function(_, chunk)
-    if not chunk then return end
-    pending = pending .. chunk
-    while true do
-      local nl = pending:find("\n", 1, true)
-      if not nl then break end
-      take(state, pending:sub(1, nl - 1))
-      pending = pending:sub(nl + 1)
-    end
-  end
-  local job = vim.system(cmd, opts, function(res)
-    take(state, pending)
-    vim.schedule(function()
-      if cancelled then return end
-      finish(state, res)
-      on_done(state.text, state.info)
-    end)
-  end)
-  return {
-    cancel = function()
-      cancelled = true
-      job:kill "sigterm"
-    end,
-  }
-end
-
-local function decode(line)
-  if line == "" then return end
-  local ok, data = pcall(vim.json.decode, line)
-  if ok and type(data) == "table" then return data end
-end
+local run, decode = require("user.ai.stream").run, require("user.ai.stream").decode
 
 ---------------------------------------------------------------------------------------------- Claude Code
 
@@ -120,7 +82,7 @@ function M.cli(request, model, on_text, on_done)
     local err = vim.trim(res.stderr or "")
     state.info.error = err ~= "" and err or ("Claude Code stopped without an answer (exit code %d)"):format(res.code)
   end
-  return stream(cmd, { cwd = cwd, stdin = transcript(request.messages) }, take, on_text, finish, on_done)
+  return run(cmd, { cwd = cwd, stdin = transcript(request.messages) }, take, on_text, finish, on_done)
 end
 
 ---------------------------------------------------------------------------------------------- Anthropic API
@@ -177,13 +139,68 @@ function M.api(request, model, key, on_text, on_done)
     end
   end
   local function finish(state, res)
-    vim.fn.delete(file)
     if not state.info.error and res.code ~= 0 then
       fail(state, "no answer from the Anthropic API (curl exit code " .. res.code .. ")")
     end
   end
   local cmd = { "curl", "-sN", "--max-time", "600", "--config", "-", api_url .. "/messages", "-d", "@" .. file }
-  return stream(cmd, { stdin = curl_config(key, extra) }, take, on_text, finish, on_done)
+  local opts = { stdin = curl_config(key, extra), cleanup = function() vim.fn.delete(file) end }
+  return run(cmd, opts, take, on_text, finish, on_done)
+end
+
+---------------------------------------------------------------------------------------------- chat models
+
+-- What CodeCompanion's `anthropic` adapter has to know about the models (plugins/codecompanion.lua). By itself
+-- it asks the API with the key among curl's arguments, where every process on the machine can read it; here
+-- the key goes in on stdin, and the answer is put into the adapter's form by CodeCompanion's own function.
+-- A chat keeps the settings it was opened with, so the adapter asks once before the first chat and waits for
+-- the answer (up to 3 seconds). When the API cannot be reached the adapter gets what is known here: enough
+-- for a chat, with a length limit every model takes and without what depends on the API's answer (compacting
+-- a long chat).
+local chat_models = { retry_at = 0 }
+-- (the address CodeCompanion's adapter sends the chat to: it does not follow $ANTHROPIC_BASE_URL)
+local chat_api = "https://api.anthropic.com/v1"
+
+local function known_models()
+  local choices = {}
+  for _, model in pairs(M.models) do
+    choices[model.id] = {
+      formatted_name = model.name,
+      meta = { context_window = 1000000, max_tokens = 64000 },
+      opts = { can_reason = true, has_vision = true },
+    }
+  end
+  return choices
+end
+
+--- The adapter's model choices. `key`: nil gives what is known here, without asking the API.
+--- `request.async == false`: wait for the API's answer (up to 3 seconds).
+function M.chat_models(key, request)
+  if key and not chat_models.fetched and not chat_models.fetching and vim.uv.now() >= chat_models.retry_at then
+    local ok, transform = pcall(require, "codecompanion.adapters.utils.models.transform")
+    if ok and type(transform.from_anthropic) == "function" then
+      chat_models.fetching = true
+      vim.system(
+        { "curl", "-s", "--max-time", "10", "--config", "-", chat_api .. "/models?limit=100" },
+        { text = true, stdin = curl_config(key) },
+        vim.schedule_wrap(function(res)
+          chat_models.fetching = false
+          chat_models.retry_at = vim.uv.now() + 60000
+          local data = res.code == 0 and decode(res.stdout or "") or nil
+          local choices = {}
+          for _, model in ipairs(data and type(data.data) == "table" and data.data or {}) do
+            local done, id, choice = pcall(transform.from_anthropic, model)
+            if done and type(id) == "string" then choices[id] = choice end
+          end
+          if next(choices) then chat_models.fetched = choices end
+        end)
+      )
+    end
+  end
+  if chat_models.fetching and request and request.async == false then
+    vim.wait(3000, function() return not chat_models.fetching end, 10)
+  end
+  return chat_models.fetched or known_models()
 end
 
 --- Is `key` a working API key? `on_result(ok, message)` on the main loop. (Lists one model: free.)

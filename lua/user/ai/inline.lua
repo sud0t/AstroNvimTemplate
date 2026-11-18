@@ -1,4 +1,5 @@
--- <Leader>Ai: prompt the AI (the provider chosen with <Leader>As: local model or Claude) from inside a buffer.
+-- <Leader>Ai: prompt the AI (the provider chosen with <Leader>As: the local model, Claude or another provider's
+-- model) from inside a buffer.
 --   Normal mode: asks for an instruction ("a function that parses an ISO date") and writes the answer below the
 --   cursor line (in its place when the line is empty).
 --   Visual mode: the instruction is about the selected lines ("handle the empty list", "translate to German"),
@@ -8,8 +9,8 @@
 -- The model sees the file around the cursor, so it can use what is defined there.
 local M = {}
 
--- How much of the file goes along. The local model has an 8k context (~3 characters per token of code);
--- Claude takes the whole file in practice.
+-- How much of the file goes along. The local model has an 8k context (~3 characters per token of code); the
+-- providers' models (`claude`: Claude and every other provider) take the whole file in practice.
 local limits = {
   ollama = { before = 9000, after = 3000, selection = 8000, answer = 1024 },
   claude = { before = 150000, after = 50000, selection = 150000, answer = 16000 },
@@ -164,10 +165,10 @@ local function start(bufnr, instruction, first, last, cursor_row)
   }
   local is_local = ai.is_local()
   local function release_gpu()
-    if is_local then require("user.ollama").unload_spilled "qwen3:4b-instruct" end
+    if is_local then require("user.ai.ollama").unload_spilled(ai.local_model()) end
   end
 
-  local stream = require "user.ai_stream"
+  local stream = require "user.ai.stream"
   local region = stream.region(bufnr, region_first, region_last)
   local written = false
   local function show(text)

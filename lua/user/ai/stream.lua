@@ -1,5 +1,6 @@
--- What the local AI features share to show an answer while it is being written, token by token:
+-- What the AI features share to show an answer while it is being written, token by token:
 --   M.chat     a streaming request to Ollama's chat endpoint
+--   M.run      a command whose output is the answer as it grows (the other providers' backends)
 --   M.region   a range of lines in a buffer that is rewritten as the answer grows (one undo step in the end)
 --   M.float    a small window in the corner showing the answer live, for answers that are not written
 --              into the buffer as they are (the review: its fixes are applied once the answer is complete)
@@ -63,6 +64,67 @@ function M.chat(request, on_text, on_done)
       job:kill "sigterm"
     end,
   }
+end
+
+--- Run `cmd` (with `opts` for vim.system: stdin, cwd) and hand every complete line of its output to
+--- `take(state, line)`: `state.add(piece)` appends to the answer, `state.info` is what `on_done` gets with it.
+--- `finish(state, res)` decides what the end of the process means. `on_text`, `on_done` and the handle are as
+--- in M.chat. `opts.cleanup()` runs when the process has ended, also after a cancel (which skips `finish`).
+--- What the backends that are not Ollama share (lua/user/ai/claude.lua, lua/user/ai/openai.lua).
+function M.run(cmd, opts, take, on_text, finish, on_done)
+  local state = { text = "", info = {} }
+  local pending, cancelled, queued = "", false, false
+  local cleanup = opts.cleanup
+  opts.cleanup = nil
+
+  function state.add(piece)
+    state.text = state.text .. piece
+    if queued then return end
+    queued = true
+    vim.schedule(function()
+      queued = false
+      if not cancelled then on_text(state.text) end
+    end)
+  end
+
+  opts.text = true
+  opts.stdout = function(_, chunk)
+    if not chunk then return end
+    pending = pending .. chunk
+    while true do
+      local nl = pending:find("\n", 1, true)
+      if not nl then break end
+      take(state, pending:sub(1, nl - 1))
+      pending = pending:sub(nl + 1)
+    end
+  end
+  local started, job = pcall(vim.system, cmd, opts, function(res)
+    take(state, pending)
+    vim.schedule(function()
+      if cleanup then pcall(cleanup) end
+      if cancelled then return end
+      finish(state, res)
+      on_done(state.text, state.info)
+    end)
+  end)
+  if not started then
+    -- (the program is not installed: nothing ran, so nothing will clean up later)
+    if cleanup then pcall(cleanup) end
+    error(job, 0)
+  end
+  return {
+    cancel = function()
+      cancelled = true
+      job:kill "sigterm"
+    end,
+  }
+end
+
+--- A line of JSON as a table, or nil.
+function M.decode(line)
+  if line == "" then return end
+  local ok, data = pcall(vim.json.decode, line)
+  if ok and type(data) == "table" then return data end
 end
 
 local ns = vim.api.nvim_create_namespace "user_ai_stream"

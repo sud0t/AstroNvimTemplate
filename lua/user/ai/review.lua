@@ -1,5 +1,6 @@
 -- <Leader>AR: review the buffer (or the visual selection) and apply the fixes in place, with the AI chosen with
--- <Leader>As: the local model (qwen3:4b-instruct, fits entirely in the T1000's VRAM) or Claude.
+-- <Leader>As: the local model (by default qwen3:4b-instruct, which fits entirely in the T1000's VRAM), Claude or
+-- another provider's model.
 -- The model answers with whole fixed functions; each one
 -- replaces its function in the buffer and is shown as an inline diff (CodeCompanion's diff UI), one fix at a
 -- time, with the reason in the banner:
@@ -8,10 +9,9 @@
 -- <Leader>AR while the model is still answering cancels the review.
 local M = {}
 
-local model = "qwen3:4b-instruct"
 -- What fits the model's 6144 token context next to the system prompt (~450 tokens) and the answer: ~4600 tokens
 -- of code, at the ~3 characters per token of dense code. Past the context Ollama silently drops the start.
--- Claude takes whole files.
+-- The providers' models (`_claude`: Claude and every other provider) take whole files.
 local max_chars, max_chars_claude = 13000, 400000
 local num_predict, num_predict_claude = 1024, 16000
 
@@ -409,6 +409,7 @@ function M.run()
   local code = table.concat(vim.api.nvim_buf_get_lines(bufnr, first, last + 1, false), "\n")
   local ai = require "user.ai"
   local is_local = ai.is_local()
+  local model = ai.local_model()
   local limit = is_local and max_chars or max_chars_claude
   if #code > limit then
     return notify(
@@ -434,7 +435,7 @@ function M.run()
   }
 
   local starting = { cancel = function() end } -- stands in for the request until the GPU has been cleared
-  local stream = require "user.ai_stream"
+  local stream = require "user.ai.stream"
   local send
 
   local function on_answer(this, answer, info, float)
@@ -449,7 +450,7 @@ function M.run()
       return send()
     end
     job = nil
-    if is_local then require("user.ollama").unload_spilled(model) end
+    if is_local then require("user.ai.ollama").unload_spilled(model) end
     if err then return notify("Request failed: " .. err, vim.log.levels.ERROR) end
     if info.done_reason == "length" then
       notify("The answer hit the length limit; the last fix may be missing", vim.log.levels.WARN)
@@ -476,7 +477,7 @@ function M.run()
   if not is_local then return send() end
   -- the review model only fits on the GPU on its own; completion reloads afterwards (~1s, once)
   job = starting
-  require("user.ollama").make_room_for(model, function()
+  require("user.ai.ollama").make_room_for(model, function()
     if job == starting then send() end -- not cancelled meanwhile
   end)
 end

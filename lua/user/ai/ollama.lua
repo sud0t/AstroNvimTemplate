@@ -12,6 +12,34 @@ function M.unload(model, on_exit)
   return curl({ url .. "/api/generate", "-d", vim.json.encode { model = model, keep_alive = 0 } }, on_exit)
 end
 
+--- Whether an installed model can hold a conversation, going by its name and the family Ollama reports: not
+--- an embedding model, and not a base model (no chat template: the completion model of plugins/minuet.lua).
+function M.is_chat_model(name, family)
+  local lower = name:lower()
+  if lower:find "embed" or (type(family) == "string" and family:lower():find "bert") then return false end
+  return lower:match ":.*%-base" == nil
+end
+
+--- The installed models that can hold a conversation, sorted: `on_done(names)` on the main loop, with nil when
+--- Ollama is not reachable.
+function M.models(on_done)
+  curl({ url .. "/api/tags" }, function(res)
+    local ok, data = pcall(vim.json.decode, res.stdout or "")
+    local names
+    if res.code == 0 and ok and type(data) == "table" and type(data.models) == "table" then
+      names = {}
+      for _, m in ipairs(data.models) do
+        local name = type(m) == "table" and m.name
+        if type(name) == "string" and M.is_chat_model(name, vim.tbl_get(m, "details", "family")) then
+          names[#names + 1] = name
+        end
+      end
+      table.sort(names)
+    end
+    vim.schedule(function() on_done(names) end)
+  end)
+end
+
 --- Unload every model except `keep`, then call `on_done` (on the main loop) once they are gone, or after ~2s,
 --- or right away when Ollama is not reachable. Nothing here blocks the editor.
 function M.make_room_for(keep, on_done)
