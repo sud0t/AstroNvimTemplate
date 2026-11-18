@@ -17,6 +17,10 @@
 -- cannot be put in place the chat starts without tools (`locked_down` below).
 -- <Leader>AS (lua/user/ai/settings.lua) has the settings: the chat rules of the active provider, the local model,
 -- how detailed commit messages are.
+-- <Leader>AC is the chat of the AI chosen (lua/user/ai/init.lua, `open_chat`), always as a buffer in the current
+-- window: with Claude through the Claude Code login it is Claude Code itself, in a terminal buffer with its
+-- history in a second one (lua/user/ai/claude_code.lua), and with anything else the chat here, shown and
+-- hidden in turn in the window (no split; the chat <Leader>Ac opens for a commit message keeps its split).
 
 local prompt_library = {
   -- <Leader>Ac, `:CodeCompanion /commitmsg`; the diff comes from lua/user/ai/commit.lua
@@ -242,9 +246,11 @@ return {
             maps.x[lhs], maps.v[lhs] = map, nil
           end
         end
-        -- <Leader>Ac writes a commit message for the current diff (lua/user/ai/commit.lua); the chat toggle the
-        -- community module has there moves to <Leader>AC
-        maps.n["<Leader>AC"], maps.x["<Leader>AC"] = maps.n["<Leader>Ac"], maps.x["<Leader>Ac"]
+        -- <Leader>Ac writes a commit message for the current diff (lua/user/ai/commit.lua). The chat toggle the
+        -- community module has there is <Leader>AC, and opens the chat of the AI chosen: Claude Code or the
+        -- CodeCompanion chat (lua/user/ai/init.lua, `open_chat`).
+        local chat = { function() require("user.ai").open_chat() end, desc = "AI chat (Claude Code, or CodeCompanion)" }
+        maps.n["<Leader>AC"], maps.x["<Leader>AC"] = chat, chat
         maps.x["<Leader>Ac"] = nil
         maps.n["<Leader>Ac"] = { function() require("user.ai.commit").open() end, desc = "Write commit message (diff)" }
         -- <Leader>Ai: prompt the model from inside the buffer (lua/user/ai/inline.lua). It takes the place of

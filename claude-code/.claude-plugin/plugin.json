@@ -1,0 +1,5 @@
+{
+  "name": "nvim-history",
+  "version": "0.1.0",
+  "description": "Mirrors the conversation into the Neovim that started this session"
+}

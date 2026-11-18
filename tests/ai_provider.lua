@@ -6,7 +6,8 @@
 -- the pickers are stand-ins, and the state lives in a directory of its own.
 -- What this cannot show is what the providers really answer. By hand, for each one you use: connect it in
 -- <Leader>As, run <Leader>Ai on a line, and open a chat (<Leader>AC) and ask it which model it is. For Claude
--- through the login: choose each model in turn and ask a new chat the same.
+-- through the login, <Leader>AC is Claude Code itself (tests/claude_code.lua) and the chat here is
+-- `:CodeCompanionChat`: choose each model in turn and ask a new chat the same.
 local uv = vim.uv
 
 local repo = vim.fs.dirname(vim.fs.dirname(assert(uv.fs_realpath(debug.getinfo(1, "S").source:sub(2)))))

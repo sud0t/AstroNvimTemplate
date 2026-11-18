@@ -6,7 +6,8 @@
 -- of their own (<Esc> goes back). "Set up provider..." connects one: for Claude the setup wizard (login, chat
 -- bridge, API key), for the others a key, which is checked with the provider and stored in the system keyring.
 -- The swap applies to the inline prompt (<Leader>Ai), the review (<Leader>AR), the commit message (<Leader>Ac)
--- and the CodeCompanion chat (<Leader>AC, for chats opened after it). Ghost-text completion (<Leader>Aq) always
+-- and the chat (<Leader>AC: Claude Code in a buffer of its own with Claude through the login, see `open_chat`;
+-- else the CodeCompanion chat, for chats opened after the swap). Ghost-text completion (<Leader>Aq) always
 -- stays local. The choice is remembered across sessions; every action names the model it is using.
 -- Keys: an environment variable wins, then the system keyring (`secret-tool`, service nvim-ai). A key is never
 -- written to a file or put on a command line here. (CodeCompanion's chat hands it to curl in a file of
@@ -402,6 +403,66 @@ function M.current_chat_adapter()
     if type(adapter) == "string" then return adapter end
   end
   return (M.chat_adapter())
+end
+
+--- The CodeCompanion chat in a window like a file, and gone again: shown where the cursor is, in place of the
+--- buffer that is there, which comes back when it is hidden. Only this chat: the one <Leader>Ac opens for a
+--- commit message keeps its split. (Not `CodeCompanionChat Toggle` with the "buffer" layout: that hides the
+--- chat by switching whatever window the cursor is in to its alternate buffer, wherever the chat is.)
+local function toggle_chat()
+  local codecompanion = require "codecompanion"
+  local as_buffer = { layout = "buffer" }
+  local chat = codecompanion.last_chat()
+  local here = vim.api.nvim_get_current_win()
+  if chat and vim.api.nvim_win_get_buf(here) == chat.bufnr then
+    -- (one that has a window of its own, as the commit message's: that window closes)
+    local own = chat.ui.window_opts and chat.ui.window_opts.layout
+      or require("codecompanion.config").display.chat.window.layout
+    if own ~= "buffer" then return chat.ui:hide() end
+    -- hide it: what the window showed before, else the buffer before this one, else an empty one
+    chat.ui:hide { keep_window = true }
+    local back = vim.w[here].ai_chat_before
+    if not (type(back) == "number" and vim.api.nvim_buf_is_valid(back) and back ~= chat.bufnr) then
+      back = vim.fn.bufnr "#"
+    end
+    if back > 0 and back ~= chat.bufnr and vim.api.nvim_buf_is_valid(back) then
+      vim.api.nvim_win_set_buf(here, back)
+    else
+      -- (not :enew, which keeps the buffer the window has when that one is empty and has no name)
+      vim.api.nvim_win_set_buf(here, vim.api.nvim_create_buf(true, false))
+    end
+    vim.w[here].ai_chat_before = nil
+    return
+  end
+  if chat then
+    -- in another window of this tab: go there
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.api.nvim_win_get_buf(win) == chat.bufnr then return vim.api.nvim_set_current_win(win) end
+    end
+  end
+  local win = require("user.ai.claude_code").window()
+  local before = vim.api.nvim_win_get_buf(win)
+  vim.api.nvim_set_current_win(win)
+  vim.w[win].ai_chat_before = before
+  if chat then
+    -- (the buffer it will speak of as #{buffer}: the one it takes the place of)
+    local known, context = pcall(function() return require("codecompanion.utils.context").get(before) end)
+    if known and context then chat.buffer_context = context end
+    chat.ui:show_in_win { winnr = win, toggled = true, window_opts = as_buffer }
+  else
+    codecompanion.chat { window_opts = as_buffer }
+  end
+end
+
+--- <Leader>AC: the chat of the current choice, as a buffer in the current window. With Claude through the
+--- Claude Code login that is Claude Code itself, in a terminal buffer with its history beside it
+--- (lua/user/ai/claude_code.lua; it needs `claude`, not the chat bridge). With anything else (the local model,
+--- a provider's key, Claude by API key, which Claude Code would not be billed to) it is the CodeCompanion
+--- chat, shown and hidden in turn.
+function M.open_chat()
+  local s = load()
+  if s.provider == "claude" and s.route ~= "api" then return require("user.ai.claude_code").open() end
+  toggle_chat()
 end
 
 ---------------------------------------------------------------------------------------------------- rules
