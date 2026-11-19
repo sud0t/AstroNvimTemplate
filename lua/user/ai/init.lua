@@ -455,7 +455,7 @@ local function toggle_chat()
 end
 
 --- <Leader>AC: the chat of the current choice, as a buffer in the current window. With Claude through the
---- Claude Code login that is Claude Code itself, in a terminal buffer with its history beside it
+--- Claude Code login that is Claude Code itself, in a terminal buffer that takes the editor's keys
 --- (lua/user/ai/claude_code.lua; it needs `claude`, not the chat bridge). With anything else (the local model,
 --- a provider's key, Claude by API key, which Claude Code would not be billed to) it is the CodeCompanion
 --- chat, shown and hidden in turn.

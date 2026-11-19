@@ -18,9 +18,9 @@
 -- <Leader>AS (lua/user/ai/settings.lua) has the settings: the chat rules of the active provider, the local model,
 -- how detailed commit messages are.
 -- <Leader>AC is the chat of the AI chosen (lua/user/ai/init.lua, `open_chat`), always as a buffer in the current
--- window: with Claude through the Claude Code login it is Claude Code itself, in a terminal buffer with its
--- history in a second one (lua/user/ai/claude_code.lua), and with anything else the chat here, shown and
--- hidden in turn in the window (no split; the chat <Leader>Ac opens for a commit message keeps its split).
+-- window: with Claude through the Claude Code login it is Claude Code itself, in a terminal buffer
+-- (lua/user/ai/claude_code.lua), and with anything else the chat here, shown and hidden in turn in the
+-- window (no split; the chat <Leader>Ac opens for a commit message keeps its split).
 
 local prompt_library = {
   -- <Leader>Ac, `:CodeCompanion /commitmsg`; the diff comes from lua/user/ai/commit.lua

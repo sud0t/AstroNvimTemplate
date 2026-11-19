@@ -1,42 +1,43 @@
--- Tests for Claude Code in a buffer and its chat history: lua/user/ai/claude_code.lua (the two buffers, the
--- keys, what the mod's batches turn into), lua/user/ai/claude_history.lua (the Markdown, what <CR> opens) and
--- `open_chat` in lua/user/ai/init.lua (<Leader>AC: Claude Code or the CodeCompanion chat).
+-- Tests for Claude Code in a buffer: lua/user/ai/claude_code.lua (how it is started, the keys of its buffer,
+-- what happens when it ends), lua/user/ai/claude_links.lua (what <CR> opens) and `open_chat` in
+-- lua/user/ai/init.lua (<Leader>AC: Claude Code or the CodeCompanion chat).
 --   nvim --clean -i NONE -l ~/.config/nvim/tests/claude_code.lua
 -- prints what failed and exits with 1, or "ok". `claude` is a stand-in that writes down how it was started
--- and the bytes it is sent; the browser, the picker and the questions are stand-ins too.
--- The mod has tests of its own: `claude plugin test ~/.config/nvim/claude-code`.
+-- and the bytes it is sent; the browser and the questions are stand-ins too.
 --
--- What this cannot show is the real program in the terminal buffer, and the mod talking to this Neovim. By
+-- What this cannot show is the real program, and the modes and the cursor of a terminal that is typed in. By
 -- hand, with Claude (the Claude Code login) chosen in <Leader>As:
---    1. <Leader>AC in a file of a project: Claude Code fills the window (no split), you can type at once, and
---       it is in the project's root. No question about a plugin or mod comes up.
+--    1. <Leader>AC in a file of a project: Claude Code fills the window (no split), you can type at once, it
+--       is in the project's root, and its tab says `claude`. The cursor at the prompt is the bar of insert
+--       mode, and it is the only one: no block beside it.
 --    2. Ask it to read ~/.zshrc: refused (reads outside the directory, as `claude` in the shell).
---    3. In its prompt: Esc and i switch between NORMAL and INSERT; <S-CR> and `\` then <CR> make a new line;
---       <C-g> opens the prompt in the editor, and so does <C-x><C-x><C-e>; <C-z> does nothing.
---    4. <C-k> (or any of <C-h/j/k/l> with no window that way): the chat history, with what was said so far.
---       The same key again: back in Claude Code, typing. With a split open, the keys move between the
---       windows as always.
---    5. While Claude works, the history follows: your prompt under "## You", the answer under "## Claude",
---       a line per tool call that gets its tick, a failed one marked. Type a second prompt while it is still
---       working: that one shows up under "## You" as well. (If it does not: `:let g:claude_code_debug = 1`,
---       start a new session, do it again, and the `<!-- row: ... -->` lines say what the prompt came in as.)
---    6. In the history, <CR> on: a file path the answer names (opens it; `path:12` at the line), a link whose
---       text is its address (opens in the browser), a link with other text (asks first, with the address),
---       a file outside the project, /etc/hostname say (asks first, with its path). <C-o> comes back.
---    7. In the history, <Leader>fc on a word: the picker greps Claude Code's directory; <CR> on a result
---       opens it.
---    8. <Leader>AC from another buffer: the same session. :ls shows one terminal.
---    9. /clear: a new "# Claude Code" heading in the history. /resume of an earlier conversation: its
---       messages appear. /compact: a line saying so, what was above stays. /exit: "Claude Code exited";
---       <Leader>AC starts it again.
---   10. <Leader>x on Claude Code asks first. <Leader>x on the history closes it; a window key brings it back,
---       whole.
---   11. Quit Neovim with a session running and start it again with the last session (<Leader>Sl): no `claude`
+--    3. <Esc>: normal mode, the statusline in its colour, the cursor a block where the caret was. k goes up
+--       out of the prompt into the conversation; v and k select upwards and y yanks; / searches. i is the
+--       prompt again. <C-k> and <C-j> are the same two steps.
+--    4. While Claude works, <Esc> <Esc> stops it (the first leaves the prompt, the second is Claude Code's).
+--       In one of its menus the arrows, j k and <CR> choose, as long as you are at the prompt.
+--    5. `\`: the file tree, and Claude Code draws itself again in the narrower window; `\` once more. Then gg
+--       and scroll down: is the conversation there once, or are parts of it repeated? The same question
+--       after /compact, and after Ctrl+O twice.
+--    6. With Claude Code in the only window, <CR> on a file in the file tree: it opens in a split beside it.
+--    7. Above the prompt, <CR> on: a file path Claude named (opens it; `path:12` at the line), a web address
+--       (opens in the browser), an address that is broken over two rows (asks first, with all of it), a file
+--       outside the project, /etc/hostname say (asks first). <C-o> comes back. And a Markdown link in an
+--       answer: is its address printed, to press <CR> on?
+--    8. <Leader>fc on a word of the conversation: the picker greps for it; <CR> on a result opens it.
+--    9. At the prompt, <S-CR> and `\` then <CR> make a new line. <C-g> opens the prompt in Neovim: <Esc> and
+--       :wq work in it, and its text is in the prompt afterwards. <C-x> <C-x> <C-e> opens it too (Claude
+--       Code's Ctrl+X Ctrl+E). <C-z> does nothing.
+--   10. <Leader>AC from another buffer: the same session. :ls shows one terminal.
+--   11. /exit: the buffer stays, in normal mode, with "[Process exited 0]" at its end; <Leader>AC starts the
+--       next session, in the same directory. <Leader>x on a running session closes it at once, and /resume
+--       in a new one brings the conversation back.
+--   12. Quit Neovim with a session running and start it again with the last session (<Leader>Sl): no `claude`
 --       starts by itself, no empty terminal buffer.
---   12. <Leader>As, choose Local (or a provider with a key): <Leader>AC is the CodeCompanion chat, in the
+--   13. <Leader>As, choose Local (or a provider with a key): <Leader>AC is the CodeCompanion chat, in the
 --       window (no split); again, and the buffer you were in is back. <Leader>Ac outside a commit still opens
 --       its chat in a split.
---   13. <Leader>AC from a file of this configuration asks before it starts Claude Code here; so it does from
+--   14. <Leader>AC from a file of this configuration asks before it starts Claude Code here; so it does from
 --       ~/.config and from ~.
 local uv = vim.uv
 
@@ -87,34 +88,63 @@ local two_lines = base .. "/home/two\nlines.txt" -- (a name that would put a lin
 write(two_lines, { "nor this" })
 assert(uv.fs_symlink(two_lines, project .. "/link2.txt"))
 
--- `claude`: how it was started, then every byte it is sent
+-- `claude`: how it was started, what is on its screen, then every byte it is sent. $CLAUDE_TEST_CHILD has
+-- it start another program first: `editor` as Claude Code starts the editor of its Ctrl+G (the terminal is
+-- the editor's), `command` as it runs a command that happens to be that editor (it is not), `other` for a
+-- program that has the terminal and is not the editor.
 write(base .. "/bin/claude", {
   "#!/bin/sh",
   "{",
   [[  printf 'cwd=%s\n' "$PWD"]],
   [[  for a in "$@"; do printf 'arg=%s\n' "$a"; done]],
-  [[  printf 'token=%s\nnvim=%s\nwatch=%s\nserver=%s\nopenai=[%s]\nanthropic=[%s]\n' \]],
-  [[    "$NVIM_CLAUDE_TOKEN" "$NVIM_CLAUDE_NVIM" "$CLAUDE_CODE_PLUGIN_DIR_WATCH" "$NVIM" \]],
-  [[    "${OPENAI_API_KEY-not set}" "${ANTHROPIC_API_KEY-not set}"]],
+  [[  printf 'server=[%s]\nopenai=[%s]\nanthropic=[%s]\ngemini=[%s]\nscreen=%s\ncursor=%s\nlinks=%s\n' \]],
+  [[    "${NVIM-not set}" "${OPENAI_API_KEY-not set}" "${ANTHROPIC_API_KEY-not set}" "${GEMINI_API_KEY-not set}" \]],
+  [[    "$CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN" "$CLAUDE_CODE_NATIVE_CURSOR" "$FORCE_HYPERLINK"]],
   [[} > "$CLAUDE_TEST_OUT/started.$$"]],
   [[mv "$CLAUDE_TEST_OUT/started.$$" "$CLAUDE_TEST_OUT/started"]],
+  [[cat "$CLAUDE_TEST_OUT/screen" 2>/dev/null]],
   "stty raw -echo 2>/dev/null",
+  [[case "$CLAUDE_TEST_CHILD" in]],
+  [[  editor) "$EDITOR" ;;]],
+  [[  command) "$EDITOR" < /dev/null & ;;]],
+  [[  other) sleep 5 ;;]],
+  "esac",
   [[exec cat > "$CLAUDE_TEST_OUT/keys"]],
 })
 vim.fn.setfperm(base .. "/bin/claude", "rwxr-xr-x")
+-- (a script, so that the program is called by this name; it takes the terminal for as long as it is one)
+write(base .. "/bin/fake-editor", { "#!/bin/sh", "cat > /dev/null", "sleep 5", "exit 0" })
+vim.fn.setfperm(base .. "/bin/fake-editor", "rwxr-xr-x")
 vim.env.PATH = base .. "/bin:" .. vim.env.PATH
 vim.env.CLAUDE_TEST_OUT = out
+vim.env.EDITOR = base .. "/bin/fake-editor"
+vim.env.VISUAL = nil
 vim.env.OPENAI_API_KEY = "sk-not-for-claude-code"
 vim.env.ANTHROPIC_API_KEY = "sk-ant-not-for-claude-code"
+vim.fn.setenv("GEMINI_API_KEY", "") -- (set, to nothing: it is that again afterwards)
 
-local notes, asked, answers, opened, grepped = {}, {}, {}, {}, {}
+local notes, asked, answers, opened, fed, typed = {}, {}, {}, {}, {}, {}
 vim.notify = function(msg) notes[#notes + 1] = msg end
 vim.fn.confirm = function(question)
   asked[#asked + 1] = question
   return table.remove(answers, 1) or 2 -- No, unless the test says otherwise
 end
 vim.ui.open = function(what) opened[#opened + 1] = what end
-package.loaded["snacks"] = { picker = { grep_word = function(opts) grepped[#grepped + 1] = opts or {} end } }
+-- (a key handed on to the program in the terminal: there is no terminal mode here for it to arrive in)
+local fed_escaped
+vim.api.nvim_feedkeys = function(keys, _, escape)
+  fed[#fed + 1] = keys
+  fed_escaped = escape
+end
+-- (and no keyboard: the key that is typed after <C-x>)
+vim.fn.getcharstr = function() return table.remove(typed, 1) or "" end
+-- how Neovim is at the moment the program is started
+local at_start = {}
+local jobstart = vim.fn.jobstart
+vim.fn.jobstart = function(argv, opts)
+  at_start = { guicursor = vim.o.guicursor, openai = vim.env.OPENAI_API_KEY, argv = argv }
+  return jobstart(argv, opts)
+end
 
 local function wait_for(cond, ms) return vim.wait(ms or 4000, cond, 20) end
 local function started()
@@ -142,625 +172,463 @@ local function press(mode, lhs)
   assert(map.buffer == 1 and map.callback, ("no buffer-local %s mapping of %s"):format(mode, lhs))
   map.callback()
 end
+--- The keys a buffer maps for itself in `mode`, as the bytes of each, in order: without [[ and ]], which
+--- Neovim gives every terminal buffer.
+local function mapped(buf, mode)
+  local keys = {}
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+    if map.lhs ~= "[[" and map.lhs ~= "]]" then keys[#keys + 1] = vim.keycode(map.lhs) end
+  end
+  table.sort(keys)
+  return keys
+end
+local function codes(list)
+  local keys = vim.tbl_map(vim.keycode, list)
+  table.sort(keys)
+  return keys
+end
 local function buffer_text(buf) return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") end
 local function terminals()
   return vim.tbl_filter(function(buf) return vim.bo[buf].buftype == "terminal" end, vim.api.nvim_list_bufs())
 end
 
-local history = require "user.ai.claude_history"
+local links = require "user.ai.claude_links"
 
---------------------------------------------------------------------------------------------- the Markdown
+---------------------------------------------------------------------------------------- what <CR> reads
 
 do
-  local state = history.new()
-  local first = {
-    session = "s1",
-    cwd = "/work/proj",
-    ops = {
-      { op = "user", id = "u1", text = "hello\nthere", at = 1795000000000 },
-      { op = "assistant", id = "a1:0", text = "Hi **there**" },
-      { op = "tool", id = "a1:1", tool_id = "t1", name = "Read", input = { file_path = "/work/proj/src/main.rs" } },
-      { op = "tool", id = "a1:2", tool_id = "t2", name = "Bash", input = { command = "cargo test\nsecond line" } },
-      { op = "result", tool_id = "t1" },
-      { op = "result", tool_id = "t2", error = "error[E0433]: failed\nmore" },
-      { op = "assistant", id = "a2:0", text = "Done." },
-      { op = "notice", id = "n1", text = "Conversation compacted" },
-    },
+  --- What `at` finds with the cursor on `piece` of row `row`: the texts in turn, a joined one marked "+".
+  local function at(lines, row, piece)
+    local col = assert(lines[row]:find(piece, 1, true), piece)
+    local found = links.at(lines, row, col)
+    return found and vim.tbl_map(function(text) return (text.joined and "+" or "") .. text.text end, found)
+  end
+  local function same(a, b) return vim.deep_equal(a, b) end
+
+  local rows = {
+    "● See src/main.rs:12:3, or https://example.net/x.",
+    "● Read(src/main.rs)",
+    "  (in `notes.md`).   and    more",
+    "",
+    "  https://en.wikipedia.org/wiki/Vim_(text_editor).",
+    "",
+    "│ src/main.rs#L7 │",
+    "",
+    "  - https://example.com/longer/than/the/next",
+    "  - https://example.com/short",
+    "  https://example.com/as/long/as/it/gets/here",
+    "  https://example.com/another",
   }
-  local edits = history.apply(state, first)
-  local text = table.concat(state.lines, "\n")
-  ok("a section starts with its heading", state.lines[1]:match "^# Claude Code · %d%d:%d%d · /work/proj$", state.lines[1])
-  ok("a prompt has its heading and its lines", has(text, "\n## You · ") and has(text, "\n\nhello\nthere\n"), text)
-  ok("an answer has one heading", select(2, text:gsub("## Claude", "")) == 1, text)
-  ok("a tool call that was answered is ticked", has(text, "\n- [x] Read `src/main.rs`\n"), text)
   ok(
-    "a tool call that failed says so, in one line",
-    has(text, "\n- [x] Bash `cargo test` **failed**: error[E0433]: failed\n"),
-    text
+    "a path, without the comma after it",
+    same(at(rows, 1, "main.rs"), { "src/main.rs:12:3" }),
+    vim.inspect(at(rows, 1, "main.rs"))
   )
-  ok("text after tool calls is set apart", has(text, "failed\n\nDone.\n\n_Conversation compacted_"), text)
-  ok("a first batch is all new lines", edits.first == 1 and next(edits.changed) == nil, vim.inspect(edits))
-
-  local before = #state.lines
-  history.apply(state, first)
-  ok("a batch that comes again adds nothing", #state.lines == before, #state.lines)
-
-  edits = history.apply(state, {
-    session = "s1",
-    cwd = "/work/proj",
-    ops = {
-      { op = "tool", id = "a3:0", tool_id = "t3", name = "mcp__github__list_issues", input = {} },
-      { op = "assistant", id = "a3:1", text = "one block" },
-      { op = "assistant", id = "a3:2", text = "and the next\nwith a line" },
-    },
-  })
-  text = table.concat(state.lines, "\n")
-  ok("new rows go below", edits.first == before + 1, vim.inspect(edits))
-  ok("an MCP tool is named by its server", has(text, "- [ ] github: list_issues"), text)
-  ok("blocks of text are paragraphs", has(text, "one block\n\nand the next\nwith a line"), text)
-  local third = #state.lines
-  edits = history.apply(state, { session = "s1", ops = { { op = "result", tool_id = "t3" } } })
-  local row
-  for i, line in ipairs(state.lines) do
-    if has(line, "github: list_issues") then row = i end
-  end
   ok(
-    "a result for an earlier line rewrites that line only",
-    edits.changed[row] and edits.first == third + 1 and state.lines[row] == "- [x] github: list_issues",
-    vim.inspect(edits)
+    "an address, without the full stop",
+    same(at(rows, 1, "example.net"), { "https://example.net/x" }),
+    vim.inspect(at(rows, 1, "example.net"))
   )
-
-  history.apply(state, { session = "s1", cwd = "/work/other", ops = {} })
-  ok("another directory is said", has(state.lines[#state.lines], "_Now in /work/other_"), state.lines[#state.lines])
-
-  local kept = #state.lines
-  history.apply(state, { session = "s2", cwd = "/work/other", ops = { { op = "user", id = "u1", text = "again" } } })
-  text = table.concat(state.lines, "\n")
-  ok("another session is a new section below", select(2, text:gsub("# Claude Code · ", "")) == 2 and #state.lines > kept, text)
-  ok("and its rows are its own", has(text, "\n\nagain"), text)
-  history.apply(state, { session = "s1", cwd = "/work/proj", ops = first.ops })
-  text = table.concat(state.lines, "\n")
   ok(
-    "a conversation that is resumed is drawn again, tool calls too",
-    select(2, text:gsub("%- %[x%] Read `src/main.rs`", "")) == 2,
-    text
+    "what a tool was called with comes before the whole of it",
+    same(at(rows, 2, "main"), { "src/main.rs", "Read(src/main.rs)" }),
+    vim.inspect(at(rows, 2, "main"))
   )
-  history.apply(state, { session = "s2", cwd = "/work/other", ops = {} })
-
-  local same = #state.lines
-  for _, junk in ipairs {
-    "text",
-    {},
-    { op = "user" },
-    { op = "user", text = 5 },
-    { op = "tool", name = "Read" },
-    { op = "result", tool_id = "never" },
-    { op = "result" },
-    { op = "nonsense", text = "x" },
-  } do
-    local fine, err = pcall(history.apply, state, { session = "s2", ops = { junk } })
-    ok("an op that is not one is passed over", fine and #state.lines == same, err or vim.inspect(junk))
-  end
-  ok("a batch without ops is passed over", pcall(history.apply, state, { session = "s2", ops = 7 }))
-
-  history.apply(state, { session = "s2", ops = { { op = "user", id = "u7", text = "twice", folded = true } } })
-  local once = #state.lines
-  history.apply(state, { session = "s2", ops = { { op = "user", id = "u8", text = "twice", folded = true } } })
-  ok("a prompt typed while Claude worked, which comes in by two rows, is shown once", #state.lines == once)
-  history.apply(state, {
-    session = "s2",
-    ops = {
-      { op = "user", id = "u9", text = "go on" },
-      { op = "notice", id = "n9", text = "/model opus" },
-      { op = "user", id = "u10", text = "go on" },
-    },
-  })
   ok(
-    "a prompt typed twice is two prompts",
-    select(2, table.concat(state.lines, "\n"):gsub("\ngo on", "")) == 2,
-    table.concat(state.lines, "\n")
+    "quotes and brackets around it are not part of it",
+    same(at(rows, 3, "notes"), { "notes.md" }),
+    vim.inspect(at(rows, 3, "notes"))
+  )
+  ok(
+    "a bracket that closes one of its own is",
+    same(at(rows, 5, "wikipedia"), { "https://en.wikipedia.org/wiki/Vim_(text_editor)" }),
+    vim.inspect(at(rows, 5, "wikipedia"))
+  )
+  ok("nothing between words", links.at(rows, 3, (rows[3]:find("and    ", 1, true)) + 4) == nil)
+  ok("nothing on an empty row, or past the rows", links.at(rows, 4, 0) == nil and links.at(rows, 99, 0) == nil)
+  ok(
+    "in a box: the text, not its sides",
+    same(at(rows, 7, "main"), { "src/main.rs#L7" }),
+    vim.inspect(at(rows, 7, "main"))
+  )
+  ok("and nothing on a side", links.at(rows, 7, 0) == nil and links.at(rows, 7, #rows[7] - 1) == nil)
+  ok(
+    "the longest row of a list is not broken: what follows is too short to be the rest of it",
+    same(at(rows, 9, "longer"), { "https://example.com/longer/than/the/next" }),
+    vim.inspect(at(rows, 9, "longer"))
+  )
+  ok(
+    "nor does an address go on in the next one",
+    same(at(rows, 11, "as/long"), { "https://example.com/as/long/as/it/gets/here" }),
+    vim.inspect(at(rows, 11, "as/long"))
+  )
+  ok(
+    "and the next one is not the rest of it",
+    same(at(rows, 12, "another"), { "https://example.com/another" }),
+    vim.inspect(at(rows, 12, "another"))
   )
 
+  -- an address that did not fit in its row
+  local address = "https://example.com/" .. ("a/"):rep(23) .. "end.html"
+  local head = "  see "
+  local cut = 60 - #head
+  local broken = {
+    ("─"):rep(90),
+    ("x"):rep(20) .. " " .. ("y"):rep(39),
+    head .. address:sub(1, cut),
+    "  " .. address:sub(cut + 1) .. " and more",
+    "  short https://example.org/b",
+    "  next row",
+  }
   ok(
-    "a line is cut by its characters, not its bytes",
-    history.describe("Bash", { command = ("日"):rep(45) }) == "Bash `" .. ("日"):rep(45) .. "`"
-      and history.describe("Bash", { command = ("日"):rep(120) }) == "Bash `" .. ("日"):rep(100) .. "…`"
+    "an address broken at the end of its row is put together, and said to be",
+    same(at(broken, 3, "example.com"), { "+" .. address, address:sub(1, cut) }),
+    vim.inspect(at(broken, 3, "example.com"))
   )
-
-  ok("a command with backticks stays one code span", history.describe("Bash", { command = "echo `date`" }) == "Bash `` echo `date` ``")
   ok(
-    "a search names its pattern and where",
-    history.describe("Grep", { pattern = "parse_args", path = "/p/src" }, "/p") == "Grep `parse_args` in `src`"
+    "from the row it goes on in too",
+    same(at(broken, 4, "end.html"), { "+" .. address, address:sub(cut + 1) }),
+    vim.inspect(at(broken, 4, "end.html"))
   )
-  ok("a fetch names its address", history.describe("WebFetch", { url = "https://example.com/a" }) == "WebFetch <https://example.com/a>")
-  ok("an address that is not one is left out", history.describe("WebFetch", { url = "https://x/ <y>" }) == "WebFetch")
-  ok("input that is not a table is nothing", history.describe("Read", "x") == "Read" and history.describe(nil, nil) == "tool")
+  ok(
+    "one that merely ends its row is left as it is",
+    same(at(broken, 5, "example.org"), { "https://example.org/b" }),
+    vim.inspect(at(broken, 5, "example.org"))
+  )
+  local longer = "https://example.com/" .. ("a/"):rep(60) .. "end.html"
+  local three = {
+    ("x"):rep(60),
+    head .. longer:sub(1, cut),
+    "  " .. longer:sub(cut + 1, cut + 58),
+    "  " .. longer:sub(cut + 59) .. ".",
+  }
+  ok(
+    "over three rows, from the one in the middle",
+    #longer > cut + 58 and same(at(three, 3, "a/a"), { "+" .. longer, longer:sub(cut + 1, cut + 58) }),
+    vim.inspect(at(three, 3, "a/a"))
+  )
+  ok(
+    "a word that would have fitted in its row was not broken there",
+    same(at({ "  the first row ends in src/ma", "  in.rs and goes on to the end" }, 1, "src"), { "src/ma" }),
+    vim.inspect(at({ "  the first row ends in src/ma", "  in.rs and goes on to the end" }, 1, "src"))
+  )
+  local boxed = {
+    "│ see https://example.com/aaaa │",
+    "│ bbbb/end.html and more       │",
+  }
+  ok(
+    "and in a box, up to its side",
+    same(at(boxed, 1, "example"), { "+https://example.com/aaaabbbb/end.html", "https://example.com/aaaa" }),
+    vim.inspect(at(boxed, 1, "example"))
+  )
 end
 
----------------------------------------------------------------------------------------- what <CR> opens
+---------------------------------------------------------------------------------------- what it names
 
 do
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].filetype = "markdown"
-  local lines = {
-    "See [the docs](https://example.com/docs?q=1) and [https://example.com/a](https://example.com/a).",
-    "<https://example.org/a>",
-    "Run `src/main.rs:12:3` now, or src/main.rs#L7 maybe.",
-    "plain https://example.net/x, and   text",
-    "[bad](javascript:alert(1)) [f](file:///tmp/a%20b.txt) [v](vscode://file/x)",
-    "[spaced](<src/with space.rs>)",
-  }
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  local function at(row, piece)
-    local col = assert(lines[row]:find(piece, 1, true), piece) - 1
-    return history.target(buf, row - 1, col + 1)
-  end
-
-  local target = at(1, "the docs")
-  ok(
-    "on a link's text: where it leads, and that the text hid it",
-    target and target.kind == "url" and target.url == "https://example.com/docs?q=1" and target.hidden == true,
-    vim.inspect(target)
-  )
-  target = at(1, "https://example.com/a]")
-  ok("a link whose text is its address hides nothing", target and target.kind == "url" and not target.hidden, vim.inspect(target))
-  target = at(2, "example.org")
-  ok("an autolink", target and target.url == "https://example.org/a" and not target.hidden, vim.inspect(target))
-  target = at(3, "main.rs:12")
-  ok(
-    "a path in a code span, with line and column",
-    target and target.kind == "path" and vim.deep_equal(target.candidates[2], { path = "src/main.rs", line = 12, col = 3 }),
-    vim.inspect(target)
-  )
-  target = at(3, "main.rs#L7")
-  ok("a path with #L", target and target.kind == "path" and target.candidates[2].line == 7, vim.inspect(target))
-  target = at(4, "example.net")
-  ok("a bare address, without the comma after it", target and target.url == "https://example.net/x", vim.inspect(target))
-  ok("nothing between words", history.target(buf, 3, (lines[4]:find("and   ", 1, true)) + 3) == nil)
-  target = at(5, "bad")
-  ok("javascript: is refused", target and target.kind == "refused", vim.inspect(target))
-  target = at(5, "[v]")
-  ok("another program's links are refused", target and target.kind == "refused", vim.inspect(target))
-  target = at(5, "[f]")
-  ok(
-    "file:// is a path, decoded",
-    target and target.kind == "path" and target.candidates[1].path == "/tmp/a b.txt",
-    vim.inspect(target)
-  )
-  target = at(6, "spaced")
-  ok("a path in angle brackets", target and target.candidates[1].path == "src/with space.rs", vim.inspect(target))
-
-  ok("an address with a space in it is refused", history.classify("https://example.com/a b").kind == "refused")
-  target = history.classify "https://example.com/a"
+  ok("an address with a space in it is refused", links.classify("https://example.com/a b").kind == "refused")
+  local target = links.classify "https://example.com/a"
   ok(
     "an address has its host, and nothing to ask about",
-    target.host == "example.com" and target.hidden == false and target.why == nil,
+    target.kind == "url" and target.host == "example.com" and target.why == nil,
     vim.inspect(target)
   )
-  target = history.classify("https://example.com/a", true)
-  ok("one a link's text hid is asked about", target.hidden == true and has(target.why, "the link's text"), vim.inspect(target))
   for name, case in pairs {
     ["a name before an @"] = { "https://github.com@collector.example/x", "before an @", "collector.example" },
     ["letters of another alphabet"] = { "https://exаmple.com/x", "not plain ASCII", "exаmple.com" },
     ["their xn-- spelling"] = { "https://xn--exmple-4nf.com/x", "xn--", "xn--exmple-4nf.com" },
-    ["a mark that turns the text around"] = { "https://example.com/\226\128\174gpj.exe", "not plain ASCII", "example.com" },
+    ["a mark that turns the text around"] = {
+      "https://example.com/\226\128\174gpj.exe",
+      "not plain ASCII",
+      "example.com",
+    },
   } do
-    target = history.classify(case[1])
+    target = links.classify(case[1])
     ok(
       "an address that reads as another is asked about, and why: " .. name,
-      target.kind == "url" and target.hidden == true and has(target.why, case[2]) and target.host == case[3],
+      target.kind == "url" and has(target.why, case[2]) and target.host == case[3],
       vim.inspect(target)
     )
   end
   ok(
     "what a question shows cannot pass for something else",
-    history.spelled "exаmple.com/\226\128\174x\n" == "ex<U+0430>mple.com/<U+202E>x<U+000A>",
-    history.spelled "exаmple.com/\226\128\174x\n"
+    links.spelled "exаmple.com/\226\128\174x\n" == "ex<U+0430>mple.com/<U+202E>x<U+000A>",
+    links.spelled "exаmple.com/\226\128\174x\n"
   )
-  ok("text with a control character is nothing", history.classify "src/main.rs\27[0m" == nil)
+  ok("text with a control character is nothing", links.classify "src/main.rs\27[0m" == nil)
+  ok("javascript: is refused", links.classify("javascript:alert(1)").kind == "refused")
+  ok("another program's links are refused", links.classify("vscode://file/x").kind == "refused")
+  target = links.classify "file:///tmp/a%20b.txt"
+  ok(
+    "file:// is a path, decoded",
+    target.kind == "path" and target.candidates[1].path == "/tmp/a b.txt",
+    vim.inspect(target)
+  )
+  target = links.classify "src/main.rs:12:3"
+  ok(
+    "a path with a line and a column",
+    target.kind == "path" and vim.deep_equal(target.candidates[2], { path = "src/main.rs", line = 12, col = 3 }),
+    vim.inspect(target)
+  )
+  ok("a path with #L", links.classify("src/main.rs#L7").candidates[2].line == 7)
 
-  local found = history.resolve(history.classify "src/main.rs:12:3", { "/nowhere", project }, project)
+  local found = links.resolve(links.classify "src/main.rs:12:3", { "/nowhere", project }, project)
   ok(
     "a path is looked for in each directory",
     found and found.path == project .. "/src/main.rs" and found.line == 12 and found.col == 3 and found.inside == true,
     vim.inspect(found)
   )
-  found = history.resolve(history.classify(odd), {}, project)
+  found = links.resolve(links.classify(odd), {}, project)
   ok("a name with | % # ` $ in it is the file of that name", found and found.path == odd, vim.inspect(found))
-  found = history.resolve(history.classify "~/proj/notes.md", {}, project)
+  found = links.resolve(links.classify "~/proj/notes.md", {}, project)
   ok("~ is the home directory", found and found.path == project .. "/notes.md" and found.inside, vim.inspect(found))
-  found = history.resolve(history.classify(outside), {}, project)
-  ok("a file outside Claude Code's directory is said to be", found and found.path == outside and found.inside == false, vim.inspect(found))
-  found = history.resolve(history.classify "../outside.txt", { project }, project)
-  ok("also by a path that climbs out of it", found and found.path == outside and found.inside == false, vim.inspect(found))
-  found = history.resolve(history.classify "link.txt", { project }, project)
-  ok("and by a link in it that leads out: the file itself", found and found.path == outside and found.inside == false, vim.inspect(found))
-  found = history.resolve(history.classify "src/main.rs", { project }, "/")
+  found = links.resolve(links.classify(outside), {}, project)
+  ok(
+    "a file outside Claude Code's directory is said to be",
+    found and found.path == outside and found.inside == false,
+    vim.inspect(found)
+  )
+  found = links.resolve(links.classify "../outside.txt", { project }, project)
+  ok(
+    "also by a path that climbs out of it",
+    found and found.path == outside and found.inside == false,
+    vim.inspect(found)
+  )
+  found = links.resolve(links.classify "link.txt", { project }, project)
+  ok(
+    "and by a link in it that leads out: the file itself",
+    found and found.path == outside and found.inside == false,
+    vim.inspect(found)
+  )
+  found = links.resolve(links.classify "src/main.rs", { project }, "/")
   ok("nothing is inside when Claude Code was started in /", found and found.inside == false, vim.inspect(found))
-  found = history.resolve(history.classify "src/main.rs", { project }, nil)
+  found = links.resolve(links.classify "src/main.rs", { project }, nil)
   ok("nor when it was not started", found and found.inside == false, vim.inspect(found))
   local why
-  found, why = history.resolve(history.classify "$HOME/proj/notes.md", { project }, project)
+  found, why = links.resolve(links.classify "$HOME/proj/notes.md", { project }, project)
   ok("a variable is not expanded", not found and has(why, "No file"), vim.inspect(found))
-  found, why = history.resolve(history.classify "pipe", { project }, project)
+  found, why = links.resolve(links.classify "pipe", { project }, project)
   ok("a pipe is not a file to open", not found and has(why, "No file"), why)
-  found, why = history.resolve(history.classify "src", { project }, project)
+  found, why = links.resolve(links.classify "src", { project }, project)
   ok("a directory is said to be one", not found and has(why, "is a directory"), why)
-  found = history.resolve(history.classify "/dev/zero", {}, project)
+  found = links.resolve(links.classify "/dev/zero", {}, project)
   ok("a device is not a file to open", not found)
   if uv.fs_stat "/proc/self/environ" then
-    found, why = history.resolve(history.classify "/proc/self/environ", {}, "/proc")
+    found, why = links.resolve(links.classify "/proc/self/environ", {}, "/proc")
     ok("nor what the kernel shows as a file", not found and has(why, "not a file on a disk"), why or vim.inspect(found))
   end
 end
 
------------------------------------------------------------------------------------------ the two buffers
+-------------------------------------------------------------------------------------------- the buffer
 
 local cc = require "user.ai.claude_code"
 local S = cc._state()
+
+-- an address this Neovim can be reached at, as every Neovim with a window has one
+local listening = pcall(vim.fn.serverstart, "127.0.0.1:0")
+if not (listening and vim.v.servername ~= "") then
+  print "(no server could be started here: that Claude Code is not told Neovim's address was not tried)"
+end
+-- what is on Claude Code's screen
+local long = "https://example.com/" .. ("seg/"):rep(20) .. "end.html"
+write(out .. "/screen", {
+  "● Read(src/main.rs)",
+  "  see src/main.rs:12:3, and notes.md.",
+  "  docs: https://example.org/a for more",
+  "  elsewhere: " .. outside,
+  "  bad: https://github.com@collector.example/x and https://exаmple.com/x",
+  "  names: link2.txt pipe no/such.txt",
+  "  long: " .. long .. " and so on",
+  "  the end",
+})
 
 vim.cmd.cd(project)
 vim.cmd.edit(project .. "/notes.md")
 local file_buf = vim.api.nvim_get_current_buf()
 local windows = #vim.api.nvim_list_wins()
+local cursor = vim.o.guicursor
 
 cc.open()
-ok("Claude Code starts", wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end), table.concat(notes, "\n"))
+ok(
+  "Claude Code starts",
+  wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end),
+  table.concat(notes, "\n")
+)
 local term = vim.api.nvim_get_current_buf()
 local info = started()
 ok("in the window, without a split", #vim.api.nvim_list_wins() == windows and vim.bo[term].buftype == "terminal")
-ok("a listed buffer that is hidden, not unloaded, when left", vim.bo[term].buflisted and vim.bo[term].bufhidden == "hide")
+ok(
+  "a listed buffer that is hidden, not unloaded, when left",
+  vim.bo[term].buflisted and vim.bo[term].bufhidden == "hide"
+)
+ok(
+  "named after the program, so that its tab says `claude`",
+  vim.fn.fnamemodify(vim.api.nvim_buf_get_name(term), ":t") == "claude",
+  vim.api.nvim_buf_get_name(term)
+)
 ok("it starts in Neovim's directory when the file has no project root", info.cwd == project, info.cwd)
+local given = #info.args == 2 and info.args[1] == "--settings" and vim.json.decode(info.args[2]) or {}
 ok(
-  "with the settings `claude` has in the shell",
-  info.args[1] == "--settings" and has(info.args[2], '"blockReadsOutsideWorkingDirectories":true'),
+  "with the settings `claude` has in the shell, and nothing else",
+  vim.tbl_get(given, "permissions", "blockReadsOutsideWorkingDirectories") == true,
   vim.inspect(info.args)
 )
 ok(
-  "and the mod of this configuration",
-  info.args[#info.args - 1] == "--plugin-dir" and info.args[#info.args] == vim.fn.stdpath "config" .. "/claude-code",
-  vim.inspect(info.args)
+  "its own vim mode is off, and it keeps to the main screen",
+  given.editorMode == "normal" and given.tui == "default",
+  vim.inspect(given)
 )
-ok("the launch has a token", info.token ~= nil and info.token:match "^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$" and info.token == S.token, info.token)
-ok("the mod is told which nvim to call", info.nvim == vim.v.progpath, info.nvim)
-ok("and where this Neovim listens", info.server == vim.v.servername, info.server)
-if vim.v.servername == "" then
-  -- (where no socket can be made, as in a sandbox)
-  ok("a Neovim that cannot be reached says so in the history", has(table.concat(S.hist.lines, "\n"), "has no address"))
-end
-ok("the mod is not reloaded while the session runs", info.watch == "0", info.watch)
+ok(
+  "the main screen, the terminal's cursor and addresses in full are asked for",
+  info.screen == "1" and info.cursor == "1" and info.links == "0",
+  vim.inspect(info)
+)
+ok("it is not told where this Neovim listens", info.server == "[]", info.server)
 ok("another provider's key does not reach Claude Code: it is not set at all", info.openai == "[not set]", info.openai)
 ok("nor a key for Claude: this is the login", info.anthropic == "[not set]", info.anthropic)
+ok("nor one that is set to nothing", info.gemini == "[not set]", info.gemini)
+ok(
+  "Neovim has its keys as before",
+  vim.env.OPENAI_API_KEY == "sk-not-for-claude-code"
+    and vim.env.ANTHROPIC_API_KEY == "sk-ant-not-for-claude-code"
+    and vim.fn.environ().GEMINI_API_KEY == "",
+  vim.inspect { vim.env.OPENAI_API_KEY, vim.env.ANTHROPIC_API_KEY, vim.fn.environ().GEMINI_API_KEY }
+)
+ok(
+  "the terminal is made with insert mode's cursor for its prompt",
+  has(at_start.guicursor, ",t:ver25") and not has(at_start.guicursor, "t:block") and at_start.openai == nil,
+  vim.inspect(at_start)
+)
+ok("and 'guicursor' is as before", vim.o.guicursor == cursor, vim.o.guicursor)
 
 local job = S.job
 vim.api.nvim_win_set_buf(0, file_buf)
 cc.open()
-ok("<Leader>AC again is the same session", S.job == job and vim.api.nvim_get_current_buf() == term and #terminals() == 1)
+ok(
+  "<Leader>AC again is the same session",
+  S.job == job and vim.api.nvim_get_current_buf() == term and #terminals() == 1
+)
 
--- keys
+-- the keys
+ok(
+  "the prompt's own keys are these, and no more",
+  vim.deep_equal(mapped(term, "t"), codes { "<Esc>", "<C-k>", "<S-CR>", "<C-z>" }),
+  vim.inspect(vim.tbl_map(function(map) return map.lhs end, vim.api.nvim_buf_get_keymap(term, "t")))
+)
+ok(
+  "and these above it",
+  vim.deep_equal(mapped(term, "n"), codes { "<Esc>", "<C-j>", "<C-x>", "<CR>" }),
+  vim.inspect(vim.tbl_map(function(map) return map.lhs end, vim.api.nvim_buf_get_keymap(term, "n")))
+)
+ok(
+  "visual mode and the rest are the editor's own",
+  #mapped(term, "x") == 0 and #mapped(term, "o") == 0 and #mapped(term, "i") == 0,
+  vim.inspect { mapped(term, "x"), mapped(term, "o"), mapped(term, "i") }
+)
+local described = true
+for _, mode in ipairs { "t", "n" } do
+  for _, map in ipairs(vim.api.nvim_buf_get_keymap(term, mode)) do
+    described = described and type(map.desc) == "string" and map.desc ~= ""
+  end
+end
+ok("each says what it does (the cheatsheet lists them)", described)
 press("t", "<S-CR>")
-ok("<S-CR> is a new line for Claude Code", wait_for(function() return keys_sent() == "\n" end), vim.inspect(keys_sent()))
+ok(
+  "<S-CR> is a new line for Claude Code",
+  wait_for(function() return keys_sent() == "\n" end),
+  vim.inspect(keys_sent())
+)
+typed = { "\11" }
 press("n", "<C-X>")
-ok("<C-x> from normal mode sends Ctrl+X", wait_for(function() return keys_sent() == "\n\24" end), vim.inspect(keys_sent()))
-ok("<C-z> is taken", vim.fn.maparg("<C-Z>", "t", false, true).buffer == 1)
-
+ok(
+  "<C-x> above the prompt types Ctrl+X and the key after it at the prompt, past the mappings",
+  #fed == 1 and fed[1] == "i\24\11" and fed_escaped == true,
+  vim.inspect { fed, fed_escaped }
+)
+fed, typed = {}, { vim.keycode "<Left>" }
+press("n", "<C-X>")
+ok(
+  "a key with a name is handed on as it is",
+  #fed == 1 and fed[1] == "i\24" .. vim.keycode "<Left>" and fed_escaped == false,
+  vim.inspect { fed, fed_escaped }
+)
+fed, typed = {}, { "\195\128" }
+press("n", "<C-X>")
+ok("and a letter as a letter", fed[1] == "i\24\195\128" and fed_escaped == true, vim.inspect { fed, fed_escaped })
+fed, typed = {}, { "\27" }
+press("n", "<C-X>")
+ok("<C-x> <Esc> types nothing", #fed == 0, vim.inspect(fed))
+press("n", "<Esc>")
+ok(
+  "<Esc> from normal mode is Claude Code's Escape",
+  wait_for(function() return keys_sent() == "\n\27" end),
+  vim.inspect(keys_sent())
+)
+press("t", "<Esc>")
 press("t", "<C-K>")
-local hist = vim.api.nvim_get_current_buf()
-ok(
-  "a window key with no window that way is the history",
-  vim.api.nvim_buf_get_name(hist) == "claude-code://history" and #vim.api.nvim_list_wins() == windows,
-  vim.api.nvim_buf_get_name(hist)
-)
-ok(
-  "which is Markdown that cannot be typed in and is not a file",
-  vim.bo[hist].filetype == "markdown" and not vim.bo[hist].modifiable and vim.bo[hist].buftype == "nofile"
-)
-ok("and wraps", vim.wo.wrap and vim.wo.linebreak)
 press("n", "<C-J>")
-ok("the same again is Claude Code", vim.api.nvim_get_current_buf() == term)
-ok("where long lines are as they were", not vim.wo.wrap)
-
--- with smart-splits, as in the configuration: at the edge it goes around to the far window by itself
-local moved = {}
-local splits = {}
-for dir, name in pairs { h = "left", j = "down", k = "up", l = "right" } do
-  splits["move_cursor_" .. name] = function()
-    moved[#moved + 1] = name
-    if vim.fn.winnr(dir) == vim.fn.winnr() then
-      vim.cmd.wincmd(({ h = "l", l = "h", j = "k", k = "j" })[dir] .. "999")
-      vim.cmd(("999wincmd %s"):format(({ h = "l", l = "h", j = "k", k = "j" })[dir]))
-    else
-      vim.cmd.wincmd(dir)
-    end
-  end
-end
-package.loaded["smart-splits"] = splits
-vim.cmd "leftabove vsplit"
-vim.api.nvim_win_set_buf(0, file_buf)
-local left = vim.api.nvim_get_current_win()
-vim.cmd.wincmd "l"
-local right = vim.api.nvim_get_current_win()
-vim.api.nvim_win_set_buf(right, term)
-press("n", "<C-H>")
-ok(
-  "with a window that way the key goes there, as everywhere",
-  vim.api.nvim_get_current_win() == left and vim.api.nvim_win_get_buf(right) == term and moved[1] == "left",
-  vim.inspect(moved)
-)
-vim.api.nvim_set_current_win(right)
-press("n", "<C-L>")
-ok(
-  "and with none, to the history: not around to the far window",
-  vim.api.nvim_get_current_win() == right and vim.api.nvim_get_current_buf() == hist and #moved == 1,
-  vim.inspect(moved)
-)
-press("n", "<C-L>")
-ok("and back", vim.api.nvim_get_current_win() == right and vim.api.nvim_get_current_buf() == term and #moved == 1)
-press("t", "<C-H>")
-ok("from terminal mode too", vim.api.nvim_get_current_win() == left and vim.api.nvim_win_get_buf(right) == term)
-vim.api.nvim_set_current_win(right)
-press("n", "<C-K>")
-press("n", "q")
-ok("q in the history is Claude Code", vim.api.nvim_get_current_buf() == term)
-package.loaded["smart-splits"] = nil
-
--- the window the chat takes
-vim.api.nvim_set_current_win(left)
-vim.wo[left].winfixbuf = true
-ok("a window that keeps its buffer is not taken: the one the cursor came from", cc.window() == right)
-vim.api.nvim_win_close(right, true)
-local made = cc.window()
-ok(
-  "and with no other, a new one",
-  made ~= left and #vim.api.nvim_list_wins() == windows + 1 and not vim.wo[made].winfixbuf,
-  #vim.api.nvim_list_wins()
-)
-vim.api.nvim_set_current_win(made)
-cc.open()
-ok("where Claude Code then is", vim.api.nvim_get_current_win() == made and vim.api.nvim_get_current_buf() == term)
-vim.wo[left].winfixbuf = false
-vim.api.nvim_win_close(left, true)
-ok("one window again", #vim.api.nvim_list_wins() == windows, #vim.api.nvim_list_wins())
-
--- batches
-local function batch(ops, over)
-  return vim.json.encode(vim.tbl_extend("force", {
-    v = 1,
-    token = S.token,
-    session = "s1",
-    cwd = project,
-    ops = #ops > 0 and ops or vim.empty_dict(),
-  }, over or {}))
-end
--- (a history that is still empty after a while says so when it is looked at)
-notes = {}
-S.started = S.started - 30000
-press("n", "<C-K>")
-ok("a history with no word from the mod says so", has(notes[1], "Nothing from Claude Code's history mod"), vim.inspect(notes))
-press("n", "q")
-press("n", "<C-K>") -- in the history, on its last line
-local reply = cc.receive(batch {
-  { op = "user", id = "u1", text = "où est src/main.rs:12:3 ? 日本語" },
-  { op = "assistant", id = "a1:0", text = "See [the docs](https://example.com/docs) or <https://example.org/a>." },
-  { op = "tool", id = "a1:1", tool_id = "t1", name = "Read", input = { file_path = project .. "/src/main.rs" } },
-})
-vim.wait(100)
-local text = buffer_text(hist)
-ok("a batch is taken", reply == "ok", reply)
-ok("and is in the history, other alphabets too", has(text, "où est src/main.rs:12:3 ? 日本語") and has(text, "- [ ] Read `src/main.rs`"), text)
-ok("which stays read-only", not vim.bo[hist].modifiable)
-ok(
-  "the window on the last line follows",
-  vim.api.nvim_win_get_cursor(0)[1] == vim.api.nvim_buf_line_count(hist),
-  vim.inspect(vim.api.nvim_win_get_cursor(0))
-)
-vim.api.nvim_win_set_cursor(0, { 1, 0 })
-cc.receive(batch { { op = "result", tool_id = "t1" }, { op = "assistant", id = "a2:0", text = "Done." } })
-vim.wait(100)
-text = buffer_text(hist)
-ok("a result ticks its line", has(text, "- [x] Read `src/main.rs`") and has(text, "Done."), text)
-ok("a window that was scrolled back stays there", vim.api.nvim_win_get_cursor(0)[1] == 1)
-
-ok("a batch of another launch is refused", cc.receive(batch({}, { token = "0000000000000000" })) == "stale")
-ok("what is not a batch is refused", cc.receive "not JSON at all" == "bad" and cc.receive "[1,2" == "bad" and cc.receive(5) == "bad")
-ok("nor a batch without ops", cc.receive(vim.json.encode { token = S.token }) == "bad")
-local big = ("é"):rep(40000)
-ok("a large batch is taken", cc.receive(batch { { op = "assistant", id = "big", text = big } }) == "ok")
-vim.wait(100)
-ok("whole", has(buffer_text(hist), big))
-
--- what a batch may hold that it should not
-local function in_step()
-  return not vim.bo[hist].modifiable and vim.deep_equal(vim.api.nvim_buf_get_lines(hist, 0, -1, false), S.hist.lines)
-end
-reply = cc.receive(batch({ { op = "assistant", id = "nl", text = "in the odd directory" } }, { cwd = project .. "/a\nb" }))
 vim.wait(100)
 ok(
-  "a directory with a line break in its name is one line of the history",
-  reply == "ok" and in_step() and has(buffer_text(hist), "/proj/a b_") and has(buffer_text(hist), "in the odd directory"),
-  buffer_text(hist):sub(-200)
+  "leaving the prompt and going back send it nothing",
+  keys_sent() == "\n\27" and #fed == 0,
+  vim.inspect { keys_sent(), fed }
 )
-vim.cmd("bdelete! " .. hist)
-press("n", "<C-K>")
 ok(
-  "which can still be closed and brought back",
-  vim.api.nvim_buf_get_name(0) == "claude-code://history" and has(buffer_text(0), "in the odd directory"),
-  vim.api.nvim_buf_get_name(0)
+  "<C-z> is taken",
+  vim.fn.maparg("<C-Z>", "t", false, true).buffer == 1 and vim.fn.maparg("<C-Z>", "t", false, true).rhs == "<Nop>"
 )
-hist = vim.api.nvim_get_current_buf()
-cc.receive(batch({}, { cwd = project }))
-vim.wait(100)
-local lines_before = #S.hist.lines
-reply = cc.receive(batch { { op = "user", id = "when", text = "a prompt from no time at all", at = 1e300 } })
-vim.wait(100)
-ok(
-  "a time that is none is left out, and the prompt is there",
-  reply == "ok" and in_step() and #S.hist.lines == lines_before + 4 and S.hist.lines[lines_before + 2] == "## You",
-  vim.inspect(vim.list_slice(S.hist.lines, lines_before + 1))
-)
-lines_before = #S.hist.lines
-reply = cc.receive(vim.json.encode {
-  v = 1,
-  token = S.token,
-  session = "s1",
-  cwd = { "not", "a", "directory" },
-  ops = {
-    5,
-    "text",
-    { op = "user", id = { 1 }, text = 5, at = "noon" },
-    { op = "assistant", id = 7, text = { "a table" } },
-    { op = "tool", id = "x", tool_id = 9, name = { 1 }, input = "none" },
-    { op = "tool", id = "odd-tool", tool_id = "odd", name = 5, input = { command = { 1 }, file_path = 3 } },
-    { op = "result", tool_id = { 1 }, error = { 1 } },
-    { op = "result", tool_id = "odd", error = 5 },
-    { op = { 1 }, id = "y", text = "z" },
-    vim.NIL,
-    { op = "assistant", id = "after-null", text = "after an op that is null" },
-  },
-})
-vim.wait(100)
-ok(
-  "fields of the wrong kind are passed over: only what can be drawn is",
-  reply == "ok"
-    and in_step()
-    and vim.deep_equal(vim.list_slice(S.hist.lines, lines_before + 1, lines_before + 4), { "", "## Claude", "", "- [x] tool" }),
-  vim.inspect(reply) .. " " .. vim.inspect(vim.list_slice(S.hist.lines, lines_before + 1))
-)
-ok("ops that are not a list are no batch", cc.receive(vim.json.encode { token = S.token, ops = "all of them" }) == "bad")
-
--- the same, the way the mod sends it: another nvim, with the mod's own code and the batch on standard input
-do
-  -- (the code and the arguments are those of claude-code/hooks/register.ts: `SEND` and `send`)
-  local source = table.concat(vim.fn.readfile(repo .. "/claude-code/hooks/register.ts"), "\n")
-  local code = {}
-  for line in vim.gsplit(source:match "const SEND = `\n(.-)\n`" or "", "\n", { plain = true }) do
-    code[#code + 1] = vim.trim(line)
-  end
-  code = table.concat(code, " ")
-  ok("the mod's code for it is found", #code > 500 and not code:find "[\\`]", code:sub(1, 80))
-  local function hand(input, where, env)
-    local done
-    vim.system(
-      { vim.v.progpath, "-u", "NONE", "-i", "NONE", "--headless", "-c", "lua " .. code, "-c", "cquit 1" },
-      { cwd = "/", env = vim.tbl_extend("force", { NVIM_LOG_FILE = "/dev/null", NVIM = where }, env or {}), stdin = input },
-      function(res) done = res end
-    )
-    wait_for(function() return done ~= nil end, 12000)
-    return done or { code = -1, stdout = "", stderr = "no answer" }
-  end
-
-  local started_server, address = pcall(vim.fn.serverstart, base .. "/nvim.sock")
-  if not started_server or address == "" then
-    started_server, address = pcall(vim.fn.serverstart, "127.0.0.1:0") -- (where no socket can be made)
-  end
-  if started_server and address ~= "" then
-    local done = hand(batch { { op = "assistant", id = "rpc", text = "over the socket" } }, address)
-    vim.wait(100)
-    ok("the mod's call answers ok", done.code == 0 and done.stdout == "ok", vim.inspect(done))
-    ok("and its batch is in the history", has(buffer_text(hist), "over the socket"))
-    done = hand(batch { { op = "assistant", id = "rpc-long", text = ("long 日本 "):rep(100000) .. "the end of it" } }, address)
-    vim.wait(200)
-    ok("a long batch goes through in one", done.code == 0 and done.stdout == "ok", vim.inspect(done):sub(1, 300))
-    ok("whole", has(buffer_text(hist), "long 日本 the end of it"))
-    done = hand(batch({}, { token = "0000000000000000" }), address)
-    ok("another launch's is answered stale", done.code == 0 and done.stdout == "stale", vim.inspect(done))
-    done = hand("not a batch", address)
-    ok("what is not a batch is answered bad", done.code == 0 and done.stdout == "bad", vim.inspect(done))
-  else
-    print "(no server could be started here: the mod's call was not tried against this Neovim)"
-  end
-  local done = hand(batch {}, "collector.example:6666")
-  ok(
-    "nothing is sent to what is not a Neovim of this machine",
-    done.code == 1 and done.stdout == "" and has(done.stderr, "not where a Neovim of this machine listens"),
-    vim.inspect(done)
-  )
-  done = hand(batch {}, base .. "/no-such.sock")
-  ok("a Neovim that is gone is a failure, said on standard error", done.code == 1 and done.stdout == "" and done.stderr ~= "", vim.inspect(done))
-
-  -- what answers there is not Neovim: it asks the caller to run code, then says "ok"
-  local trap = uv.new_tcp()
-  local bound = pcall(function() assert(trap:bind("127.0.0.1", 0)) end)
-  if bound then
-    local marker = out .. "/ran-in-the-sender"
-    local asks = vim.mpack.encode { 0, 7, "nvim_exec_lua", { ("io.open(%q, 'w'):close() return 1"):format(marker), {} } }
-    local answers_ok = vim.mpack.encode { 1, 1, vim.NIL, "ok" }
-    local served = 0
-    trap:listen(8, function()
-      local peer = uv.new_tcp()
-      trap:accept(peer)
-      served = served + 1
-      peer:read_start(function() end)
-      peer:write(asks)
-      local later = uv.new_timer()
-      later:start(200, 0, function()
-        peer:write(answers_ok)
-        later:close()
-      end)
-    end)
-    done = hand(batch {}, "127.0.0.1:" .. trap:getsockname().port)
-    vim.wait(400)
-    ok(
-      "what answers in Neovim's place cannot have the caller run anything, nor pass for Neovim",
-      served == 1 and done.code == 1 and done.stdout == "" and not uv.fs_stat(marker),
-      vim.inspect(done)
-    )
-    trap:close()
-  else
-    print "(no port could be listened on here: the answer of something that is not Neovim was not tried)"
-  end
-end
 
 -- <CR>
+ok(
+  "what Claude Code prints is in the buffer",
+  wait_for(function() return has(buffer_text(term), "the end") end),
+  buffer_text(term)
+)
 local function cursor_on(piece)
-  for row, line in ipairs(vim.api.nvim_buf_get_lines(hist, 0, -1, false)) do
+  for row, line in ipairs(vim.api.nvim_buf_get_lines(term, 0, -1, false)) do
     local col = line:find(piece, 1, true)
     if col then return vim.api.nvim_win_set_cursor(0, { row, col }) end
   end
-  error("not in the history: " .. piece)
+  error("not on the screen: " .. piece)
 end
 cursor_on "src/main.rs:12:3"
 press("n", "<CR>")
 ok(
   "<CR> on a path opens the file at the line and column",
-  vim.api.nvim_buf_get_name(0) == project .. "/src/main.rs" and vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 12, 2 }),
+  vim.api.nvim_buf_get_name(0) == project .. "/src/main.rs"
+    and vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 12, 2 }),
   vim.api.nvim_buf_get_name(0) .. " " .. vim.inspect(vim.api.nvim_win_get_cursor(0))
 )
-ok("in the same window, which no longer wraps", #vim.api.nvim_list_wins() == windows and not vim.wo.wrap)
-vim.api.nvim_win_set_buf(0, hist)
-
-cursor_on "the docs"
+ok("in the same window", #vim.api.nvim_list_wins() == windows)
+vim.api.nvim_win_set_buf(0, term)
+cursor_on "Read(src"
 press("n", "<CR>")
-ok("<CR> on a link with other text asks, with the address", #asked == 1 and has(asked[1], "https://example.com/docs"), vim.inspect(asked))
-ok("and No opens nothing", #opened == 0)
-answers = { 1 }
-press("n", "<CR>")
-ok("Yes opens it", opened[1] == "https://example.com/docs", vim.inspect(opened))
+ok(
+  "<CR> on a tool call opens the file it names",
+  vim.api.nvim_buf_get_name(0) == project .. "/src/main.rs",
+  vim.api.nvim_buf_get_name(0)
+)
+vim.api.nvim_win_set_buf(0, term)
 cursor_on "example.org"
 press("n", "<CR>")
-ok("<CR> on an address that shows itself opens it unasked", #asked == 2 and opened[2] == "https://example.org/a", vim.inspect(opened))
+ok(
+  "<CR> on a web address opens it, unasked",
+  #asked == 0 and opened[1] == "https://example.org/a",
+  vim.inspect { asked, opened }
+)
 
-cc.receive(batch {
-  {
-    op = "assistant",
-    id = "a4:0",
-    text = "elsewhere: [src/main.rs](" .. outside .. ") and <https://github.com@collector.example/x>"
-      .. " and <https://exаmple.com/x> and `link2.txt`",
-  },
-})
-vim.wait(100)
 asked, answers, opened = {}, {}, {}
-cursor_on "[src/main.rs]("
+cursor_on "outside.txt"
 press("n", "<CR>")
 ok(
   "<CR> on a file outside Claude Code's directory asks, with the file's own path",
-  #asked == 1 and has(asked[1], outside) and vim.api.nvim_get_current_buf() == hist,
+  #asked == 1 and has(asked[1], outside) and vim.api.nvim_get_current_buf() == term,
   vim.inspect(asked)
 )
 answers = { 1 }
 press("n", "<CR>")
 ok("and Yes opens it", vim.api.nvim_buf_get_name(0) == outside, vim.api.nvim_buf_get_name(0))
-vim.api.nvim_win_set_buf(0, hist)
+vim.api.nvim_win_set_buf(0, term)
 asked, answers = {}, {}
 cursor_on "collector.example"
 press("n", "<CR>")
@@ -782,59 +650,187 @@ cursor_on "link2.txt"
 press("n", "<CR>")
 ok(
   "a file's name does not put lines of its own in the question",
-  #asked == 1 and has(asked[1], "/home/two") and not has(asked[1], "two\nlines") and vim.api.nvim_get_current_buf() == hist,
+  #asked == 1
+    and has(asked[1], "/home/two")
+    and not has(asked[1], "two\nlines")
+    and vim.api.nvim_get_current_buf() == term,
   vim.inspect(asked)
 )
-asked, answers = {}, {}
-
-cc.receive(batch {
-  { op = "assistant", id = "a3:0", text = "odd: `` " .. odd .. " `` pipe: `pipe` gone: `no/such.txt`" },
-})
-vim.wait(100)
-cursor_on "we|ird"
+asked, answers, notes = {}, {}, {}
+cursor_on "pipe"
 press("n", "<CR>")
-ok("a file with | % # ` $ in its name opens as that file", vim.api.nvim_buf_get_name(0) == odd, vim.api.nvim_buf_get_name(0))
-vim.api.nvim_win_set_buf(0, hist)
-notes = {}
-cursor_on "`pipe`"
-press("n", "<CR>")
-ok("a pipe is not opened", vim.api.nvim_get_current_buf() == hist and has(notes[1], "No file"), vim.inspect(notes))
+ok("a pipe is not opened", vim.api.nvim_get_current_buf() == term and has(notes[1], "No file"), vim.inspect(notes))
 cursor_on "no/such"
 press("n", "<CR>")
-ok("nor a file that is not there", vim.api.nvim_get_current_buf() == hist and has(notes[2], "No file: no/such.txt"), vim.inspect(notes))
-
-cursor_on "Done"
-press("n", "<Space>fc")
-ok("<Leader>fc greps Claude Code's directory", grepped[1] and grepped[1].cwd == project, vim.inspect(grepped))
-
--- closed and brought back
-vim.api.nvim_win_set_buf(0, term)
-vim.cmd("bdelete! " .. hist) -- as <Leader>x closes it
-press("n", "<C-K>")
-local again = vim.api.nvim_get_current_buf()
 ok(
-  "a history that was closed comes back whole",
-  vim.api.nvim_buf_get_name(again) == "claude-code://history" and has(buffer_text(again), "Done.") and has(buffer_text(again), "odd: "),
-  buffer_text(again)
+  "nor a file that is not there",
+  vim.api.nvim_get_current_buf() == term and has(notes[2], "No file: no/such.txt"),
+  vim.inspect(notes)
 )
-hist = again
-press("n", "<C-J>")
+notes = {}
+vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(term), 0 })
+press("n", "<CR>")
+ok("and on nothing it says so", has(notes[1], "Nothing to open"), vim.inspect(notes))
 
--- the session ends
-asked, answers = {}, {}
-press("n", "<Space>x")
-ok("<Leader>x on Claude Code asks, and No leaves it running", #asked == 1 and S.job == job and vim.api.nvim_buf_is_valid(term), vim.inspect(asked))
+asked, answers, opened = {}, {}, {}
+cursor_on "seg/seg"
+press("n", "<CR>")
+ok(
+  "<CR> on an address that goes on in the next row asks, with all of it",
+  #asked == 1 and has(asked[1], "put together") and has(asked[1], long) and #opened == 0,
+  vim.inspect(asked)
+)
 answers = { 1 }
-press("n", "<Space>x")
-ok("and Yes ends it", wait_for(function() return S.job == nil end) and not vim.api.nvim_buf_is_valid(term))
-ok("and said in the history", has(buffer_text(hist), "_Claude Code exited"), buffer_text(hist))
-local old_token = S.token
-uv.fs_unlink(out .. "/started")
-vim.api.nvim_win_set_buf(0, file_buf)
+press("n", "<CR>")
+ok("and Yes opens all of it", opened[1] == long, vim.inspect(opened))
+asked, answers, opened = {}, { 1 }, {}
+cursor_on "end.html"
+press("n", "<CR>")
+ok("from its second row too", #asked == 1 and opened[1] == long, vim.inspect { asked, opened })
+asked, answers, opened = {}, {}, {}
+
+-- shown in another window
+vim.cmd "rightbelow vsplit"
+local right = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(right, file_buf)
+vim.wo[right].number = true
 cc.open()
-ok("<Leader>AC then starts it again", wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end) and S.job ~= job)
-ok("as a new launch", S.token ~= old_token and cc.receive(batch({}, { token = old_token })) == "stale")
-ok("with one terminal buffer", #terminals() == 1, #terminals())
+ok(
+  "in another window it is the terminal it was: no line numbers",
+  vim.api.nvim_get_current_buf() == term and not vim.wo[right].number
+)
+vim.api.nvim_win_set_buf(right, file_buf)
+ok("and the file that was there has its own again", vim.wo[right].number)
+vim.api.nvim_win_close(right, true)
+
+-- the window the chat takes
+vim.cmd "leftabove vsplit"
+vim.api.nvim_win_set_buf(0, file_buf)
+local left = vim.api.nvim_get_current_win()
+vim.cmd.wincmd "l"
+right = vim.api.nvim_get_current_win()
+vim.api.nvim_set_current_win(left)
+vim.wo[left].winfixbuf = true
+ok("a window that keeps its buffer is not taken: the one the cursor came from", cc.window() == right)
+vim.api.nvim_win_close(right, true)
+local made = cc.window()
+ok(
+  "and with no other, a new one",
+  made ~= left and #vim.api.nvim_list_wins() == windows + 1 and not vim.wo[made].winfixbuf,
+  #vim.api.nvim_list_wins()
+)
+vim.api.nvim_set_current_win(made)
+cc.open()
+ok("where Claude Code then is", vim.api.nvim_get_current_win() == made and vim.api.nvim_get_current_buf() == term)
+vim.wo[left].winfixbuf = false
+vim.api.nvim_win_close(left, true)
+ok("one window again", #vim.api.nvim_list_wins() == windows, #vim.api.nvim_list_wins())
+
+-- the session ends by itself
+notes = {}
+vim.fn.jobstop(job)
+ok("Claude Code exits", wait_for(function() return S.job == nil end))
+ok("its buffer stays to be read", vim.api.nvim_buf_is_valid(term) and has(buffer_text(term), "the end"))
+ok(
+  "without the keys that talked to it; <CR> still opens things",
+  #mapped(term, "t") == 0 and vim.deep_equal(mapped(term, "n"), codes { "<CR>" }),
+  vim.inspect(vim.tbl_map(function(map) return map.lhs end, vim.api.nvim_buf_get_keymap(term, "n")))
+)
+ok("and what the window shows needs no saying", #notes == 0, vim.inspect(notes))
+uv.fs_unlink(out .. "/started")
+vim.cmd.cd(base .. "/home") -- (the next session is where the last one was, wherever Neovim is by now)
+cc.open()
+ok(
+  "<Leader>AC then starts it again",
+  wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end) and S.job ~= nil and S.job ~= job
+)
+ok("where the last session was started, unasked", started().cwd == project and #asked == 0, started().cwd)
+ok(
+  "with one terminal buffer: the old one is gone",
+  #terminals() == 1 and not vim.api.nvim_buf_is_valid(term),
+  #terminals()
+)
+vim.cmd.cd(project)
+term = vim.api.nvim_get_current_buf()
+
+-- it ends while another buffer is in the window
+vim.api.nvim_win_set_buf(0, file_buf)
+notes = {}
+vim.fn.jobstop(S.job)
+ok(
+  "an exit that nothing shows is said",
+  wait_for(function() return S.job == nil end) and has(notes[1], "Claude Code exited"),
+  vim.inspect(notes)
+)
+
+-- the buffer is closed, as <Leader>x closes it
+uv.fs_unlink(out .. "/started")
+cc.open()
+wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end)
+term = vim.api.nvim_get_current_buf()
+job = S.job
+vim.api.nvim_win_set_buf(0, file_buf)
+vim.cmd("bdelete! " .. term)
+ok(
+  "closing the buffer ends Claude Code",
+  wait_for(function() return S.job == nil end) and #terminals() == 0,
+  #terminals()
+)
+uv.fs_unlink(out .. "/started")
+cc.open()
+ok(
+  "and <Leader>AC starts it again",
+  wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end) and S.job ~= job and #terminals() == 1
+)
+
+-- the editor of Claude Code's Ctrl+G
+local function with_child(kind)
+  vim.fn.jobstop(S.job)
+  wait_for(function() return S.job == nil end)
+  vim.api.nvim_win_set_buf(0, file_buf)
+  uv.fs_unlink(out .. "/started")
+  uv.fs_unlink(out .. "/keys")
+  vim.env.CLAUDE_TEST_CHILD = kind
+  cc.open()
+  vim.env.CLAUDE_TEST_CHILD = nil
+  assert(wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end), "claude did not start")
+  -- (the program it starts is there)
+  local pid = vim.fn.jobpid(S.job)
+  assert(wait_for(function() return #vim.api.nvim_get_proc_children(pid) > 0 end), "no child of claude: " .. kind)
+  vim.wait(200)
+  fed = {}
+end
+if uv.fs_stat "/proc/self/task" then
+  with_child "editor"
+  ok("<Esc> is the editor's while Claude Code has handed it the terminal", wait_for(function()
+    fed = {}
+    press("t", "<Esc>")
+    return #fed == 1
+  end) and fed[1] == vim.keycode "<Esc>", vim.inspect(fed))
+  fed = {}
+  press("t", "<S-CR>")
+  ok(
+    "so is <S-CR>",
+    #fed == 1 and fed[1] == vim.keycode "<S-CR>" and keys_sent() == "",
+    vim.inspect { fed, keys_sent() }
+  )
+  vim.cmd "leftabove split"
+  local above = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(above, file_buf)
+  vim.cmd.wincmd "j"
+  press("t", "<C-K>")
+  ok("and <C-k> is the window above, as in every terminal", vim.api.nvim_get_current_win() == above)
+  vim.api.nvim_win_close(above, true)
+
+  with_child "command"
+  press("t", "<Esc>")
+  ok("an editor that a command runs does not have the terminal: <Esc> leaves the prompt", #fed == 0, vim.inspect(fed))
+  with_child "other"
+  press("t", "<Esc>")
+  ok("nor is another program the editor", #fed == 0, vim.inspect(fed))
+else
+  print "(no /proc here: the editor of Claude Code's Ctrl+G was not tried)"
+end
 
 -- the home directory
 vim.fn.jobstop(S.job)
@@ -846,10 +842,18 @@ asked, answers = {}, {}
 uv.fs_unlink(out .. "/started")
 cc.open()
 vim.wait(300)
-ok("in the home directory it asks first, and No starts nothing", #asked == 1 and has(asked[1], "~") and S.job == nil and not uv.fs_stat(out .. "/started"), vim.inspect(asked))
+ok(
+  "in the home directory it asks first, and No starts nothing",
+  #asked == 1 and has(asked[1], "~") and S.job == nil and not uv.fs_stat(out .. "/started"),
+  vim.inspect(asked)
+)
 answers = { 1 }
 cc.open()
-ok("Yes starts it there", wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end) and started().cwd == vim.env.HOME, started().cwd)
+ok(
+  "Yes starts it there",
+  wait_for(function() return uv.fs_stat(out .. "/started") ~= nil end) and started().cwd == vim.env.HOME,
+  started().cwd
+)
 vim.fn.jobstop(S.job)
 wait_for(function() return S.job == nil end)
 
@@ -892,7 +896,7 @@ do
   local state_file = vim.fn.stdpath "state" .. "/ai_provider.json"
   -- CodeCompanion, as much of it as `open_chat` uses
   local chat_buf = vim.api.nvim_create_buf(false, true)
-  local chat, made, hidden = nil, {}, {}
+  local chat, made_chats, hidden = nil, {}, {}
   local ui = {}
   function ui:show_in_win(opts)
     self.window_opts = opts.window_opts
@@ -902,7 +906,7 @@ do
   package.loaded["codecompanion"] = {
     last_chat = function() return chat end,
     chat = function(args)
-      made[#made + 1] = args
+      made_chats[#made_chats + 1] = args
       ui.window_opts = args.window_opts
       chat = { bufnr = chat_buf, ui = ui }
       vim.api.nvim_set_current_buf(chat_buf)
@@ -914,7 +918,7 @@ do
   local opens = 0
   local function chosen(saved)
     for name in pairs(package.loaded) do
-      if name:find "^user%.ai" and name ~= "user.ai.claude_code" and name ~= "user.ai.claude_history" then
+      if name:find "^user%.ai" and name ~= "user.ai.claude_code" and name ~= "user.ai.claude_links" then
         package.loaded[name] = nil
       end
     end
@@ -929,28 +933,28 @@ do
   local file = vim.api.nvim_get_current_buf()
   local count_before = #vim.api.nvim_list_wins()
   local fine, err = chosen { provider = "claude", route = "login" }
-  ok("with Claude through the login chosen, <Leader>AC is Claude Code", fine and opens == 1 and #made == 0, err)
+  ok("with Claude through the login chosen, <Leader>AC is Claude Code", fine and opens == 1 and #made_chats == 0, err)
   fine, err = chosen { provider = "claude", route = "api" }
   ok(
     "with Claude by API key, the CodeCompanion chat: in the window, as a buffer",
     fine
       and opens == 0
-      and #made == 1
-      and made[1].window_opts.layout == "buffer"
+      and #made_chats == 1
+      and made_chats[1].window_opts.layout == "buffer"
       and vim.api.nvim_get_current_buf() == chat_buf
       and #vim.api.nvim_list_wins() == count_before,
-    err or vim.inspect(made)
+    err or vim.inspect(made_chats)
   )
   fine, err = chosen { provider = "ollama" }
   ok(
     "again, and the buffer that was there is back",
-    fine and #made == 1 and vim.api.nvim_get_current_buf() == file and hidden[1] and hidden[1].keep_window == true,
+    fine and #made_chats == 1 and vim.api.nvim_get_current_buf() == file and hidden[1] and hidden[1].keep_window == true,
     err or vim.inspect(hidden)
   )
   fine, err = chosen { provider = "ollama" }
   ok(
     "with the local model, the same chat again, told which buffer it took the place of",
-    fine and #made == 1 and vim.api.nvim_get_current_buf() == chat_buf and chat.buffer_context.bufnr == file,
+    fine and #made_chats == 1 and vim.api.nvim_get_current_buf() == chat_buf and chat.buffer_context.bufnr == file,
     err or vim.inspect(chat)
   )
 
@@ -996,7 +1000,11 @@ do
   vim.api.nvim_win_set_buf(0, chat_buf)
   hidden = {}
   fine, err = chosen { provider = "ollama" }
-  ok("a chat in a split of its own is hidden as CodeCompanion does it", fine and #hidden == 1 and hidden[1].keep_window == nil, err or vim.inspect(hidden))
+  ok(
+    "a chat in a split of its own is hidden as CodeCompanion does it",
+    fine and #hidden == 1 and hidden[1].keep_window == nil,
+    err or vim.inspect(hidden)
+  )
 end
 
 ---------------------------------------------------------------------------------------------------- result

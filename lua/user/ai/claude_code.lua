@@ -1,76 +1,82 @@
--- Claude Code in a buffer, with its conversation in a second one.
+-- Claude Code in a buffer.
 --
 -- <Leader>AC, when the AI chosen in <Leader>As is Claude through the Claude Code login (lua/user/ai/init.lua,
--- `open_chat`), shows the `claude` terminal program itself, unchanged, as an ordinary buffer in the current
--- window: no split. Pressed again from anywhere it comes back to the session that is running. Claude Code
--- starts in the project of the file you were in (the root AstroNvim finds for it), or in Neovim's directory.
+-- `open_chat`), runs the `claude` terminal program itself as an ordinary buffer in the current window: no
+-- split. Pressed again from anywhere it comes back to the session that is running. Claude Code starts in the
+-- project of the file you were in (the root AstroNvim finds for it), or in Neovim's directory.
 --
--- The second buffer is the chat history: the conversation as Markdown, read-only, following along as it
--- happens (lua/user/ai/claude_history.lua has what it looks like). It is a real buffer, so everything works
--- in it as in a file:
---   <CR>         opens what the cursor is on: a web link in the browser (asked first when the link's text hid
---                where it leads), a file in this window, at `path:12:3` or `path#L12` when it says so
---   <Leader>fc   greps the word under the cursor in Claude Code's directory (the snacks picker, as everywhere)
---   q            back to Claude Code
+-- It is one terminal buffer, used with the keys of every other buffer. The prompt is its insert mode
+-- (terminal mode: what you type goes to Claude Code), and what Claude Code has printed above it is text:
+--   <Esc>         leaves the prompt, as it leaves insert mode. j k and the other motions then go up into the
+--                 conversation, / searches it, v V select and y yanks; `\` is the file tree and <Leader>…
+--                 what it is everywhere. i a I A go back to the prompt, and p pastes into it.
+--   <C-k>         from the prompt: up, into the conversation (as <Esc>)
+--   <C-j>         from the conversation: down, to the prompt (as i)
+--   <C-h> <C-l>   the window on that side, as everywhere; so are <C-j> at the prompt and <C-k> above it
+--   <Esc>         above the prompt is Claude Code's own Escape: it stops Claude, closes a menu
+--   <CR>          above the prompt opens what the cursor is on: a web address in the browser, a file in this
+--                 window, at `path:12:3` when it says so (lua/user/ai/claude_links.lua)
+--   <S-CR>        a new line in the prompt (so is `\` then <CR>; <C-j> is the window below, see above)
+--   <C-x>         leaves the prompt, as in every terminal. Above the prompt it is Claude Code's own Ctrl+X,
+--                 with the key after it: its Ctrl+X Ctrl+K is <C-x><C-x><C-k> from the prompt, and you are
+--                 at the prompt again (<C-x><Esc>: nothing)
+--   <C-z>         nothing: it would stop Claude Code, with no shell here to bring it back
+-- Nothing else is mapped here. <Leader>fc, <Leader>x, gx, <Tab> and the rest are the global mappings, and a
+-- file opened from the file tree or a picker goes where it goes from any terminal (a split of its own, when
+-- this is the only window). Like every terminal the buffer cannot be edited (x, dd, u say so): the prompt
+-- is edited at the prompt, or with Claude Code's Ctrl+G in a Neovim of its own, which gets <Esc> while it is
+-- open.
 --
--- Switching between the two is <C-h> <C-j> <C-k> <C-l>, the keys that move between windows: where there is a
--- window in that direction they go there as always, and where there is none they swap the chat and the
--- history in the window. So in the Claude Code buffer these four do not reach Claude Code (a new line in the
--- prompt is <S-CR> or `\` then <CR>). <C-x> leaves terminal mode as in every terminal; <C-x> again, from normal
--- mode, sends Ctrl+X to Claude Code and goes back in (its Ctrl+X Ctrl+E is <C-x><C-x><C-e>).
+-- Claude Code runs as `claude` does in the shell (where a function of the same name adds the first of
+-- these), with what makes it a buffer:
+--   - reads outside the directory it works in are refused
+--   - its own vim mode is off: the modes are Neovim's (`editorMode`)
+--   - it prints on the terminal's main screen and never takes the whole of it, so the conversation stays in
+--     the buffer, above the prompt (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN; `tui` for its offer to switch).
+--     The buffer keeps the last 'scrollback' rows of it.
+--   - its caret is the terminal's cursor, not a block it draws: one cursor, where Neovim's is, shaped as in
+--     insert mode at the prompt and a block above it (CLAUDE_CODE_NATIVE_CURSOR, and `start`)
+--   - a web link is printed as its address, which <CR> and gx can read (FORCE_HYPERLINK)
+--   - it uses the login, not a key Neovim may have in $ANTHROPIC_API_KEY (that one is for the CodeCompanion
+--     chat, and would be read by every command Claude Code runs); and it is not told where this Neovim
+--     listens ($NVIM), with which a command it runs could drive the editor
+-- Started in this configuration's own directory or one that holds it (asked first, like the home directory)
+-- it can change everything here for the next start of Neovim: as it can any project's files.
 --
--- How the conversation gets here: Claude Code is started with the mod in claude-code/ of this configuration
--- (`--plugin-dir`: only the sessions started here load it). The mod sees each row the conversation keeps and
--- hands it to this Neovim, which is `$NVIM` for everything a terminal buffer runs. It starts
---   nvim -u NONE -i NONE --headless -c 'lua …'       (the code is a constant of the mod, `SEND`)
--- with a batch (JSON) on its standard input, which calls `receive` here with it, over the socket. (Not
--- `--remote-expr` with the batch in it: the arguments of a program can be read by every account on the
--- machine.) `receive` only ever turns a batch into lines of the buffer. A batch names the launch it belongs
--- to (`NVIM_CLAUDE_TOKEN`): one from a session that was closed since is dropped. That is housekeeping, not a
--- lock: whatever can reach Neovim's socket can already do anything in it.
---
--- Claude Code runs as `claude` does in the shell, where a function of the same name adds the `--settings`
--- below: reads outside the directory it works in are refused. It uses the login, not a key Neovim may have
--- in $ANTHROPIC_API_KEY (that one is for the CodeCompanion chat, and would be read by every command Claude
--- Code runs). The mod is not reloaded while a session runs (CLAUDE_CODE_PLUGIN_DIR_WATCH=0), and runs no file
--- of its folder while one does: otherwise a command Claude Code runs in its sandbox could rewrite the mod
--- and have it run outside the sandbox at once. Started in this configuration's own directory or one that
--- holds it (asked first, like the home directory) it can change the mod and everything else here for the
--- next start, of Claude Code or of Neovim: as it can any project's files.
---
--- <CR> on a file outside the directory Claude Code was started in asks first, with the file's real path: a
--- link's text need not be where it leads, and opening a file starts what the editor has for its kind (a
+-- <CR> on a file outside the directory Claude Code was started in asks first, with the file's real path:
+-- what is printed need not be what it seems, and opening a file starts what the editor has for its kind (a
 -- language server takes its settings, and for some languages programs to run, from the file's project).
 --
--- Closing the Claude Code buffer ends the program (<Leader>x asks first; the other ways of closing buffers do
--- not). The conversation is kept by Claude Code: /resume in a new session brings it back, history included.
--- Neither buffer is stored in a session (resession).
+-- Closing the buffer ends the program, as with every terminal (<Leader>x does not ask). The conversation is
+-- kept by Claude Code: /resume in a new session brings it back. When Claude Code exits by itself the buffer
+-- stays to be read, until it is closed or <Leader>AC starts the next session. It is not stored in a session
+-- (resession).
 --
 -- tests/claude_code.lua has the tests, and at its top what to check by hand with the real program.
 local M = {}
 
-local history = require "user.ai.claude_history"
+local links = require "user.ai.claude_links"
 
-local settings = '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'
+local settings = '{"permissions":{"blockReadsOutsideWorkingDirectories":true},"editorMode":"normal","tui":"default"}'
+local environment = {
+  CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN = "1",
+  CLAUDE_CODE_NATIVE_CURSOR = "1",
+  FORCE_HYPERLINK = "0",
+  NVIM = "",
+}
 -- variables of Neovim's that Claude Code is started without
 local not_passed = { "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY" }
-local history_name = "claude-code://history"
+-- rows either side of the cursor that <CR> reads: enough for the paragraph the cursor is in, whose rows say
+-- where a row ends (claude_links.lua)
+local context = 100
 
 -- one session per Neovim
 local S = {
   term = nil, -- the terminal buffer
   job = nil, -- its job, while Claude Code runs
-  token = nil, -- names this launch in the batches of its mod
-  cwd = nil, -- where Claude Code was started (the history has where it is now: `S.hist.cwd`)
-  hist = history.new(),
-  buf = nil, -- the history buffer: a view of `S.hist.lines`
-  at_end = true, -- whether the history was left with the cursor on its last line
-  heard = false, -- whether the mod of this launch has reported in
-  started = 0, -- when it was launched (vim.uv.now)
+  cwd = nil, -- where Claude Code was started
+  keys = {}, -- the mappings of the buffer that talk to Claude Code: { mode, lhs }
 }
-
--- the longest batch taken: far more than a conversation's longest message
-local max_batch = 16 * 1024 * 1024
 
 local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Claude Code" }) end
 
@@ -99,71 +105,29 @@ function M.window()
   return win
 end
 
-------------------------------------------------------------------------------------------- history buffer
+----------------------------------------------------------------------------------------------------- <CR>
 
---- Bring the buffer in line with `S.hist.lines` after `edits` (what history.apply returned; nil: all of it).
---- A window that was on the last line stays on the last line.
-local function draw(edits)
-  local buf = S.buf
-  if not (buf and vim.api.nvim_buf_is_loaded(buf)) then return end
-  local lines = S.hist.lines
-  local count = vim.api.nvim_buf_line_count(buf)
-  local following = {}
-  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-    if vim.api.nvim_win_get_cursor(win)[1] >= count then following[#following + 1] = win end
+local function open_address(target, joined)
+  -- an address can read as another one, with what the model has read in it; and one put together from two
+  -- rows is not what either row shows. The question shows it so that it cannot mislead: see `spelled`
+  local why = {}
+  if joined then
+    why[#why + 1] = "it was put together from the rows it is broken over (gx opens what is on this row alone)"
   end
-  vim.bo[buf].modifiable = true
-  local drawn, err = pcall(function()
-    if not edits then
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-    else
-      for i in pairs(edits.changed) do
-        vim.api.nvim_buf_set_lines(buf, i - 1, i, false, { lines[i] })
-      end
-      -- (a buffer with nothing in it has one empty line, which the first lines take the place of)
-      if edits.first <= #lines then
-        vim.api.nvim_buf_set_lines(buf, edits.first - 1, -1, false, vim.list_slice(lines, edits.first))
-      end
-    end
-  end)
-  vim.bo[buf].modifiable = false -- (whatever happened: the history is never left open to typing)
-  if not drawn then error(err, 0) end
-  for _, win in ipairs(following) do
-    pcall(vim.api.nvim_win_set_cursor, win, { vim.api.nvim_buf_line_count(buf), 0 })
+  why[#why + 1] = target.why
+  if #why > 0 then
+    local question = ("Open this address? Asked because %s.\nHost: %s\n%s"):format(
+      table.concat(why, "; "),
+      links.spelled(target.host),
+      links.spelled(target.url)
+    )
+    if vim.fn.confirm(question, "&Yes\n&No", 2) ~= 1 then return end
   end
+  local _, err = vim.ui.open(target.url)
+  if err then notify(err, vim.log.levels.ERROR) end
 end
 
---- A line of this module's own in the history (Claude Code exited, the mod never reported in).
-local function note(text) draw(history.apply(S.hist, { ops = { { op = "notice", text = text } } })) end
-
---- Open what the cursor is on (see the top of this file and claude_history.lua).
-local function open_target()
-  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-  local target = history.target(vim.api.nvim_get_current_buf(), row - 1, col)
-  if not target then return notify "Nothing to open under the cursor" end
-  if target.kind == "refused" then return notify("Not opened: " .. target.what, vim.log.levels.WARN) end
-  if target.kind == "url" then
-    -- a link's text can say one thing and lead to another, with what the model has read in the address; and
-    -- an address can read as another one. The question shows it so that it cannot: see `spelled`
-    if target.hidden then
-      local question = ("Open this address? Asked because %s.\nHost: %s\n%s"):format(
-        target.why,
-        history.spelled(target.host),
-        history.spelled(target.url)
-      )
-      if vim.fn.confirm(question, "&Yes\n&No", 2) ~= 1 then return end
-    end
-    local _, err = vim.ui.open(target.url)
-    if err then notify(err, vim.log.levels.ERROR) end
-    return
-  end
-  -- where a path that does not start at `/` is looked for: where Claude Code is now, where it started, here
-  local dirs = {}
-  for _, dir in ipairs { S.hist.cwd or false, S.cwd or false, vim.fn.getcwd() } do
-    if dir and not vim.list_contains(dirs, dir) then dirs[#dirs + 1] = dir end
-  end
-  local found, why = history.resolve(target, dirs, S.cwd)
-  if not found then return notify(why, vim.log.levels.WARN) end
+local function open_file(found)
   if not found.inside then
     -- (`strtrans`: a name with a line break or a mark that turns text around in it is shown as what it is)
     local question = "Open this file? It is outside the directory Claude Code was started in.\n"
@@ -183,133 +147,122 @@ local function open_target()
   end
 end
 
-local nav -- (below)
-
---- The history buffer, made (again, after it was closed) from what the history holds.
-local function history_buffer()
-  if S.buf and vim.api.nvim_buf_is_loaded(S.buf) then return S.buf end
-  -- closed with <Leader>x it is unloaded and unlisted, and still has the name
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_get_name(buf) == history_name then pcall(vim.api.nvim_buf_delete, buf, { force = true }) end
+--- Open what the cursor is on (see the top of this file and claude_links.lua).
+local function open_target()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local first = math.max(row - context, 1)
+  local rows = vim.api.nvim_buf_get_lines(0, first - 1, row + context, false)
+  -- where a path that does not start at `/` is looked for: where Claude Code was started, and here
+  local dirs = {}
+  for _, dir in ipairs { S.cwd or false, vim.fn.getcwd() } do
+    if dir and not vim.list_contains(dirs, dir) then dirs[#dirs + 1] = dir end
   end
-  local buf = vim.api.nvim_create_buf(true, true) -- listed, scratch: no file, no swap file, hidden when left
-  S.buf = buf
-  vim.api.nvim_buf_set_name(buf, history_name)
-  vim.bo[buf].modeline = false -- (nothing the model wrote sets options)
-  vim.bo[buf].undolevels = -1
-  vim.bo[buf].filetype = "markdown"
-  pcall(vim.treesitter.start, buf, "markdown")
-  vim.bo[buf].modifiable = true
-  pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, S.hist.lines)
-  vim.bo[buf].modifiable = false
-
-  local function map(lhs, rhs, desc) vim.keymap.set("n", lhs, rhs, { buffer = buf, desc = desc, nowait = true }) end
-  map("<CR>", open_target, "Open the link or file under the cursor")
-  map("q", function() M.switch() end, "Back to Claude Code")
-  map(
-    "<Leader>fc",
-    function() require("snacks").picker.grep_word { cwd = S.hist.cwd or S.cwd } end,
-    "Find word under cursor (Claude Code's directory)"
-  )
-  for _, dir in ipairs { "h", "j", "k", "l" } do
-    map("<C-" .. dir .. ">", function() nav(dir) end, "Window in that direction, or Claude Code")
-  end
-
-  local group = vim.api.nvim_create_augroup("claude_code_history_" .. buf, { clear = true })
-  -- Long paragraphs wrap, for this buffer in the window only (as `:setlocal`): the next buffer in the window
-  -- has the window's own setting again, with nothing to put back.
-  vim.api.nvim_create_autocmd("BufWinEnter", {
-    group = group,
-    buffer = buf,
-    callback = function()
-      local win = vim.api.nvim_get_current_win()
-      if vim.api.nvim_win_get_buf(win) ~= buf then return end
-      vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
-      vim.api.nvim_set_option_value("linebreak", true, { win = win, scope = "local" })
-    end,
-  })
-  vim.api.nvim_create_autocmd("BufLeave", {
-    group = group,
-    buffer = buf,
-    callback = function()
-      S.at_end = vim.api.nvim_win_get_cursor(0)[1] >= vim.api.nvim_buf_line_count(buf)
-    end,
-  })
-  return buf
-end
-
--------------------------------------------------------------------------------------------- the two buffers
-
---- The other one of the two in this window: the history from Claude Code, Claude Code from anywhere else.
-function M.switch()
-  local win = vim.api.nvim_get_current_win()
-  if S.term and vim.api.nvim_get_current_buf() == S.term then
-    vim.cmd.stopinsert()
-    local buf = history_buffer()
-    vim.api.nvim_win_set_buf(win, buf)
-    if S.at_end then pcall(vim.api.nvim_win_set_cursor, win, { vim.api.nvim_buf_line_count(buf), 0 }) end
-    if alive() and not S.heard and vim.uv.now() - S.started > 20000 then
-      notify(
-        "Nothing from Claude Code's history mod yet: Claude Code says why in a dim line of its own, or with --debug",
-        vim.log.levels.WARN
-      )
+  local why
+  for _, text in ipairs(links.at(rows, row - first + 1, col) or {}) do
+    local target = links.classify(text.text)
+    if target and target.kind == "url" then return open_address(target, text.joined) end
+    if target and target.kind == "path" then
+      local found
+      found, why = links.resolve(target, dirs, S.cwd)
+      if found then return open_file(found) end
+    elseif target then
+      why = "Not opened: " .. target.what
     end
-  elseif alive() and vim.api.nvim_buf_is_valid(S.term) then
-    vim.api.nvim_win_set_buf(win, S.term)
-    vim.cmd.startinsert()
-  else
-    notify "Claude Code is not running (<Leader>AC starts it)"
   end
+  notify(why or "Nothing to open under the cursor", why and vim.log.levels.WARN or nil)
 end
 
---- <C-h/j/k/l> in the two buffers: with a window in that direction, what the key does everywhere else; with
---- none, the other buffer. (Decided before moving: at the edge smart-splits goes around to the far window,
---- or on to the terminal's next pane.)
-function nav(dir)
-  if vim.fn.winnr(dir) == vim.fn.winnr() then return M.switch() end
-  if vim.api.nvim_get_mode().mode ~= "t" then
-    local names = { h = "left", j = "down", k = "up", l = "right" }
-    local loaded, splits = pcall(require, "smart-splits") -- (AstroNvim's normal mode keys)
-    local move = loaded and splits["move_cursor_" .. names[dir]]
-    if type(move) == "function" then return move() end
-  end
-  vim.cmd.wincmd(dir) -- (and its terminal mode keys)
-end
+------------------------------------------------------------------------------------------------- the keys
 
 local function send(keys)
   if alive() then vim.api.nvim_chan_send(S.job, keys) end
 end
 
-local function terminal_keys(buf)
-  local function map(mode, lhs, rhs, desc)
-    vim.keymap.set(mode, lhs, rhs, { buffer = buf, desc = desc, nowait = true })
+--- Whether Claude Code has handed the terminal to its editor (Ctrl+G: $VISUAL or $EDITOR, which it starts
+--- with the terminal for its input), where the keys taken here for the prompt are the editor's. Read from
+--- /proc, as lua/plugins/toggleterm.lua does: Linux only (elsewhere the editor is not seen, and <Esc> in it
+--- leaves to normal mode here). An editor that a command of Claude Code's runs is not it: its input is not
+--- the terminal.
+local function handed_over()
+  if not alive() then return false end
+  local pid = vim.fn.jobpid(S.job)
+  local terminal = vim.uv.fs_readlink(("/proc/%d/fd/0"):format(pid))
+  local tasks = terminal and vim.uv.fs_scandir(("/proc/%d/task"):format(pid))
+  if not tasks then return false end
+  local editors = {}
+  for _, name in ipairs { "VISUAL", "EDITOR" } do
+    local program = (vim.env[name] or ""):match "%S+"
+    if program then editors[vim.fs.basename(program):sub(1, 15)] = true end -- (as much as /proc keeps of a name)
   end
-  for _, dir in ipairs { "h", "j", "k", "l" } do
-    map({ "t", "n" }, "<C-" .. dir .. ">", function() nav(dir) end, "Window in that direction, or the chat history")
+  if next(editors) == nil then editors = { vi = true, nano = true } end -- (what it then looks for)
+  for task in function() return vim.uv.fs_scandir_next(tasks) end do
+    local list = io.open(("/proc/%d/task/%s/children"):format(pid, task))
+    local children = list and list:read "*a" or ""
+    if list then list:close() end
+    for child in children:gmatch "%d+" do
+      local comm = io.open(("/proc/%s/comm"):format(child))
+      local name = comm and comm:read "*l"
+      if comm then comm:close() end
+      if editors[name or ""] and vim.uv.fs_readlink(("/proc/%s/fd/0"):format(child)) == terminal then return true end
+    end
   end
-  -- Shift+Enter is a plain Enter (send!) for a program that has not asked for the kitty key encoding;
-  -- Ctrl+J is a new line in Claude Code's prompt whatever it asked for
-  map("t", "<S-CR>", function() send "\n" end, "New line in the prompt")
-  -- Ctrl+Z would stop Claude Code with no shell around it to bring it back
-  map("t", "<C-z>", "<Nop>", "Nothing (it would suspend Claude Code)")
-  map("n", "<C-x>", function()
-    send "\24"
-    vim.cmd.startinsert()
-  end, "Send Ctrl+X to Claude Code")
-  map("n", "<Leader>x", function()
-    if alive() and vim.fn.confirm("End the Claude Code session?", "&Yes\n&No", 2) ~= 1 then return end
-    local closed = pcall(function() require("astrocore.buffer").close(buf, true) end)
-    if not closed then pcall(vim.api.nvim_buf_delete, buf, { force = true }) end
-  end, "Close Claude Code (asks first)")
+  return false
 end
 
+--- `key` to the program in the terminal as it was typed, past the mappings.
+local function pass(key) vim.api.nvim_feedkeys(vim.keycode(key), "n", false) end
+
+local function keys(buf)
+  S.keys = {}
+  local function map(mode, lhs, rhs, desc)
+    vim.keymap.set(mode, lhs, rhs, { buffer = buf, desc = desc, nowait = true })
+    S.keys[#S.keys + 1] = { mode, lhs }
+  end
+  map("t", "<Esc>", function()
+    if handed_over() then return pass "<Esc>" end
+    vim.cmd.stopinsert()
+  end, "Leave the prompt (normal mode)")
+  map("t", "<C-k>", function()
+    if handed_over() then return vim.cmd.wincmd "k" end -- (what the key is in every terminal)
+    vim.cmd.stopinsert()
+  end, "Up: from the prompt into the conversation")
+  map("n", "<C-j>", function() vim.cmd.startinsert() end, "Down: from the conversation to the prompt")
+  map("n", "<Esc>", function() send "\27" end, "Claude Code's Escape (stop, close a menu)")
+  -- Ctrl+X starts some of Claude Code's commands (Ctrl+X Ctrl+K). The key after it is read here and both
+  -- are typed at the prompt past the mappings: there <C-k> and others are the editor's
+  map("n", "<C-x>", function()
+    local read, key = pcall(vim.fn.getcharstr)
+    if not read or key == "" or key == "\27" or not alive() then return end
+    -- (a key with a name starts with the byte that marks one; in a letter that byte is a letter's)
+    vim.api.nvim_feedkeys("i\24" .. key, "n", key:byte() ~= 0x80)
+  end, "Claude Code's Ctrl+X, and the key after it")
+  -- Shift+Enter is a plain Enter (send!) for a program that has not asked for the kitty key encoding;
+  -- Ctrl+J is a new line in Claude Code's prompt whatever it asked for
+  map("t", "<S-CR>", function()
+    if handed_over() then return pass "<S-CR>" end
+    send "\n"
+  end, "New line in the prompt")
+  map("t", "<C-z>", "<Nop>", "Nothing (it would suspend Claude Code)")
+  -- (not one of the program's: it stays when Claude Code has exited)
+  vim.keymap.set(
+    "n",
+    "<CR>",
+    open_target,
+    { buffer = buf, desc = "Open the link or file under the cursor", nowait = true }
+  )
+end
+
+---------------------------------------------------------------------------------------------- the session
+
 --- Where Claude Code starts: the project of the file in `buf` (the buffer it takes the place of), else
---- Neovim's directory. nil when the home directory or this configuration is in there (or it is in this
---- configuration), and you would rather not: Claude Code may read and write all of the directory it is
---- started in.
+--- Neovim's directory; and where the last session did, when `buf` is what is left of that one. nil when the
+--- home directory or this configuration is in there (or it is in this configuration), and you would rather
+--- not: Claude Code may read and write all of the directory it is started in.
 local function start_dir(buf)
   local dir
-  if vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+  if buf == S.term then
+    dir = S.cwd
+  elseif vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
     local ok, roots = pcall(function() return require("astrocore.rooter").detect(buf) end)
     dir = ok and type(roots) == "table" and roots[1] and roots[1].paths[1] or nil
   end
@@ -332,6 +285,43 @@ local function start_dir(buf)
   return dir
 end
 
+--- 'guicursor' with terminal mode's cursor as insert mode's is: what the option says for `t` taken out (it
+--- would go on blinking under another shape), and what it says for `i` said for `t` too. nil when it says
+--- nothing for insert mode.
+local function prompt_cursor()
+  local parts, prompt = {}, {}
+  for part in vim.o.guicursor:gmatch "[^,]+" do
+    local modes, look = part:match "^([^:]+):(.+)$"
+    if not modes then return nil end
+    modes = vim.split(modes, "-", { plain = true })
+    if vim.list_contains(modes, "i") then prompt[#prompt + 1] = "t:" .. look end
+    modes = vim.tbl_filter(function(mode) return mode ~= "t" end, modes)
+    if #modes > 0 then parts[#parts + 1] = table.concat(modes, "-") .. ":" .. look end
+  end
+  return #prompt > 0 and table.concat(vim.list_extend(parts, prompt), ",") or nil
+end
+
+--- `jobstart` for Claude Code, with the two things that are only said by how Neovim is at that moment. Its
+--- environment is Neovim's without the keys of `not_passed`: not set at all, which an empty one may not be
+--- the same as to Claude Code. And a terminal is given its cursor when it is made, from 'guicursor', and
+--- keeps it (the program can change it; Claude Code does not): this one gets insert mode's, since its
+--- prompt is where you type. Both are put back before anything else runs.
+local function start(argv, opts)
+  local environ, cursor, prompt = vim.fn.environ(), vim.o.guicursor, prompt_cursor()
+  for _, name in ipairs(not_passed) do
+    vim.fn.setenv(name, vim.NIL)
+  end
+  local started, job = pcall(function()
+    if prompt then vim.o.guicursor = prompt end
+    return vim.fn.jobstart(argv, opts)
+  end)
+  if prompt then vim.o.guicursor = cursor end
+  for _, name in ipairs(not_passed) do
+    if environ[name] ~= nil then vim.fn.setenv(name, environ[name]) end
+  end
+  return started, job
+end
+
 local function launch(win)
   local exe = vim.fn.exepath "claude"
   if exe == "" then return notify("`claude` is not installed (<Leader>As, Set up provider)", vim.log.levels.ERROR) end
@@ -339,49 +329,28 @@ local function launch(win)
   local dir, why = start_dir(before)
   if not dir then return why and notify(why, vim.log.levels.ERROR) end
 
-  local token = vim.uv.random(8):gsub(".", function(byte) return ("%02x"):format(byte:byte()) end)
-  -- where the mod reaches this Neovim (`$NVIM` in what a terminal buffer runs); one started without an
-  -- address gets one now
-  local server = vim.v.servername
-  if server == "" then
-    local listening, address = pcall(vim.fn.serverstart)
-    server = listening and type(address) == "string" and address or ""
-  end
   local buf = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_set_current_win(win)
   vim.api.nvim_win_set_buf(win, buf)
-  local argv = { exe, "--settings", settings, "--plugin-dir", vim.fn.stdpath "config" .. "/claude-code" }
-  -- the login, not a key; and not the other providers' keys, as for the Claude Code chat of
-  -- lua/plugins/codecompanion.lua. `env -u`: not set at all, which an empty one (below, for where there is no
-  -- `env`) may not be the same as to Claude Code
-  local env = vim.fn.exepath "env"
-  if env ~= "" and not exe:find("=", 1, true) then
-    local unset = { env }
-    for _, name in ipairs(not_passed) do
-      vim.list_extend(unset, { "-u", name })
-    end
-    argv = vim.list_extend(unset, argv)
-  end
-  local started, job = pcall(vim.fn.jobstart, argv, {
+  -- (the program itself, by its name: the buffer is named after what is started, and listed as `claude`)
+  local started, job = start({ exe, "--settings", settings }, {
     term = true,
     cwd = dir,
-    env = {
-      NVIM = server ~= "" and server or nil,
-      NVIM_CLAUDE_TOKEN = token,
-      NVIM_CLAUDE_NVIM = vim.v.progpath,
-      NVIM_CLAUDE_DEBUG = vim.g.claude_code_debug and "1" or "",
-      CLAUDE_CODE_PLUGIN_DIR_WATCH = "0",
-      ANTHROPIC_API_KEY = "",
-      OPENAI_API_KEY = "",
-      GEMINI_API_KEY = "",
-      GOOGLE_API_KEY = "",
-      OPENROUTER_API_KEY = "",
-    },
+    env = environment,
     on_exit = function(id, code)
       vim.schedule(function()
         if S.job ~= id then return end
         S.job = nil
-        note(("Claude Code exited (code %d)"):format(code))
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        for _, key in ipairs(S.keys) do
+          pcall(vim.keymap.del, key[1], key[2], { buffer = buf })
+        end
+        if vim.api.nvim_get_current_buf() == buf then
+          -- (in terminal mode the next key would close the buffer, and what there is to read with it)
+          if vim.api.nvim_get_mode().mode == "t" then vim.cmd.stopinsert() end
+        elseif #vim.fn.win_findbuf(buf) == 0 then
+          notify(("Claude Code exited (code %d)"):format(code))
+        end
       end)
     end,
   })
@@ -394,16 +363,13 @@ local function launch(win)
   if S.term and S.term ~= buf and vim.api.nvim_buf_is_valid(S.term) then
     pcall(vim.api.nvim_buf_delete, S.term, { force = true })
   end
-  S.term, S.job, S.token, S.cwd, S.heard, S.started = buf, job, token, dir, false, vim.uv.now()
+  S.term, S.job, S.cwd = buf, job, dir
   -- hidden, not unloaded, when another buffer takes the window; and a buffer with 'bufhidden' set is left out
   -- of a stored session (AstroNvim's is_restorable), which would start `claude` anew when it is loaded
   vim.bo[buf].bufhidden = "hide"
   vim.b[buf].claude_code = true
-  terminal_keys(buf)
+  keys(buf)
   vim.cmd.startinsert()
-  if server == "" then
-    note "This Neovim has no address Claude Code could reach it at (:help serverstart): the history stays empty"
-  end
 end
 
 --- <Leader>AC: Claude Code in the current window, started when it is not running.
@@ -416,30 +382,6 @@ function M.open()
     return
   end
   launch(M.window())
-end
-
---------------------------------------------------------------------------------------------------- the mod
-
---- What the mod's sender calls (see the top of this file) with a batch: the JSON of
---- `{ token, session, cwd, ops }`. Answers "ok", "stale" (not this launch's: the mod stops sending) or "bad".
---- Never an error: the answer is all the mod has to go by.
-function M.receive(text)
-  if type(text) ~= "string" or #text > max_batch then return "bad" end
-  local decoded, batch = pcall(vim.json.decode, text, { luanil = { object = true, array = true } })
-  if not decoded or type(batch) ~= "table" or type(batch.ops) ~= "table" then return "bad" end
-  if not S.token or batch.token ~= S.token then return "stale" end
-  S.heard = true
-  -- (not from inside the call: it changes a buffer)
-  vim.schedule(function()
-    local applied, err = pcall(function() draw(history.apply(S.hist, batch)) end)
-    if applied then return end
-    pcall(draw) -- (what went in before it failed: the buffer is the history's lines again, all of them)
-    if not S.failed then
-      S.failed = true -- once: every later batch would say the same
-      notify("The chat history could not be written:\n" .. tostring(err), vim.log.levels.ERROR)
-    end
-  end)
-  return "ok"
 end
 
 --- For tests/claude_code.lua: the state, as it is.
