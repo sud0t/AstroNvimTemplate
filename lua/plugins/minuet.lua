@@ -4,8 +4,8 @@
 -- Toggled globally with <Leader>Aq (off at startup). While a suggestion is shown in insert mode:
 --   <A-A> accept all, <A-l> accept line, <A-h> un-accept that line, <A-z> accept n lines,
 --   <A-]>/<A-[> next/prev, <A-e> dismiss
--- <A-e> is also nvim-autopairs' fast wrap key (AstroNvim's default), mapped per buffer, where it won over minuet's
--- dismiss and left insert mode instead. It still does the fast wrap whenever no suggestion is shown.
+-- <A-e> is also nvim-autopairs' fast wrap key (AstroNvim's default), mapped per buffer, where it would win over
+-- minuet's dismiss. The two share the key here: it does the fast wrap whenever no suggestion is shown.
 
 local enabled = false
 local model = "qwen2.5-coder:1.5b-base"

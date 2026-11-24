@@ -9,7 +9,7 @@
 -- Both use the same instructions (M.system; the chat is the "Commit message" entry in plugins/codecompanion.lua).
 -- How much is written follows the size of the change: one line for a small one, a few bullets of context below
 -- it for a larger one. The size is measured here (`measure`, `tier_of`) and the model is told the format as a
--- fact: left to judge the size itself, the local model answered with one line for every change.
+-- fact: left to judge the size itself, the local model answers with one line for every change.
 -- <Leader>AS, Commit detail, moves that: always one line, or one step more than the size calls for.
 local M = {}
 

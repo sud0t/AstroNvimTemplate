@@ -1,44 +1,28 @@
--- AstroLSP allows you to customize the features in AstroNvim's LSP configuration engine
--- Configuration documentation can be found with `:h astrolsp`
 ---@type LazySpec
 return {
   "AstroNvim/astrolsp",
   ---@type AstroLSPOpts
   opts = {
-    -- Configuration table of features provided by AstroLSP
     diagnostics = {
       update_in_insert = false,
     },
     features = {
-      codelens = true, -- enable/disable codelens refresh on start
-      inlay_hints = true, -- enable/disable inlay hints on start (<Leader>uH toggles per buffer)
-      semantic_tokens = true, -- enable/disable semantic token highlighting
+      codelens = true,
+      inlay_hints = true, -- <Leader>uH toggles them per buffer
+      semantic_tokens = true,
     },
-    -- customize lsp formatting options
     formatting = {
-      -- control auto formatting on save
       format_on_save = {
-        enabled = false, -- enable or disable format on save globally
-        allow_filetypes = { -- enable format on save for specified filetypes only
-          -- "go",
-        },
-        ignore_filetypes = { -- disable format on save for specified filetypes
-          -- "python",
-        },
+        enabled = false, -- plugins/go.lua turns it on, for Go alone
+        allow_filetypes = {},
+        ignore_filetypes = {},
       },
-      disabled = { -- disable formatting capabilities for the listed language servers
-      },
-      timeout_ms = 1000, -- default format timeout
-      -- filter = function(client) -- fully override the default formatting function
-      --   return true
-      -- end
+      disabled = {},
+      timeout_ms = 1000,
     },
-    -- enable servers that you already have installed without mason
-    servers = {},
-    -- customize language server configuration passed to `vim.lsp.config`
-    -- client specific configuration can also go in `lsp/` in your configuration root (see `:h lsp-config`)
+    servers = {}, -- for servers installed outside Mason
+    -- passed to `vim.lsp.config`
     config = {
-      -- ["*"] = { capabilities = {} }, -- modify default LSP client settings such as capabilities
       -- ruff logs its routine INFO/WARN messages to stderr, which ends up in lsp.log as errors
       ruff = { init_options = { settings = { logLevel = "error" } } },
       -- the same for clangd (it logs every request, tens of thousands of lsp.log lines per session) and taplo
@@ -46,8 +30,8 @@ return {
       taplo = {
         cmd_env = { RUST_LOG = "error" },
         -- Without a workspace folder taplo treats a file as excluded: a TOML file outside a git repository
-        -- (~/.config/...) got "this document has been excluded" as its only diagnostic and was not formatted.
-        -- Fall back to the file's own directory.
+        -- (~/.config/...) gets "this document has been excluded" as its only diagnostic and no formatting.
+        -- So fall back to the file's own directory.
         root_dir = function(bufnr, on_dir)
           local root = vim.fs.root(bufnr, { ".taplo.toml", "taplo.toml", ".git" })
           local name = vim.api.nvim_buf_get_name(bufnr)
@@ -55,25 +39,15 @@ return {
         end,
       },
     },
-    -- customize how language servers are attached
     handlers = {
-      -- a function with the key `*` modifies the default handler, functions takes the server name as the parameter
-      -- ["*"] = function(server) vim.lsp.enable(server) end
-
-      -- the key is the server that is being setup with `vim.lsp.config`
-      -- rust_analyzer = false, -- setting a handler to false will disable the set up of that language server
-
       -- mason-lspconfig starts every installed server, and the stylua package also ships a language server
       -- mode; the lua pack already formats with stylua through none-ls, so this would format Lua twice
       stylua = false,
     },
-    -- Configure buffer local auto commands to add when attaching a language server
     autocmds = {
-      -- first key is the `augroup` to add the auto commands to (:h augroup)
-      -- `cond` is a client capability (or a `fun(client, bufnr): boolean`); once it fails for every client of a
-      -- buffer, the auto commands are deleted for that buffer
-      -- (no codelens refresh group here: Neovim 0.12 keeps the lenses current itself once AstroLSP has called
-      -- `vim.lsp.codelens.enable()`, and re-enabling them per buffer on BufEnter/InsertLeave undid <Leader>uL)
+      -- No codelens refresh group here: Neovim 0.12 keeps the lenses current itself once AstroLSP has called
+      -- `vim.lsp.codelens.enable()`, and re-enabling them per buffer on BufEnter/InsertLeave would undo
+      -- <Leader>uL.
 
       -- ghost text with the parameters (and defaults) still missing from the call under the cursor
       signature_ghost = {
@@ -90,13 +64,11 @@ return {
         },
       },
     },
-    -- mappings to be set up on attaching of a language server
     mappings = {
       n = {
-        -- Run the codelens shown on the current line. AstroLSP's `vim.lsp.codelens.run()` asks the server for the
-        -- lenses again and gives up ("No codelens at current line") whenever the server is busy and answers
-        -- "content modified" (rust-analyzer does, right after an edit or while indexing). The lenses already on
-        -- screen are the ones being looked at, so run those; fall back to the request when none are cached.
+        -- AstroLSP's `vim.lsp.codelens.run()` asks the server for the lenses again, and gives up ("No codelens
+        -- at current line") when a busy server answers "content modified" (rust-analyzer, right after an edit
+        -- or while indexing). So run the lenses already on screen, and only ask when none are cached.
         ["<Leader>lL"] = {
           function()
             local bufnr = vim.api.nvim_get_current_buf()
@@ -136,11 +108,5 @@ return {
         },
       },
     },
-    -- A custom `on_attach` function to be run after the default `on_attach` function
-    -- takes two parameters `client` and `bufnr`  (`:h lsp-attach`)
-    -- on_attach = function(client, bufnr)
-    -- this would disable semanticTokensProvider for all clients
-    -- client.server_capabilities.semanticTokensProvider = nil
-    -- end,
   },
 }

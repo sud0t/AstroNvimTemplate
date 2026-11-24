@@ -12,7 +12,7 @@ local moved = { -- community key -> key here
 }
 
 -- The community module's snacks picker integration (<C-t> in a picker sends the results to trouble) reads
--- require("trouble.sources.snacks").actions while snacks is set up at startup, which loaded trouble on every
+-- require("trouble.sources.snacks").actions while snacks is set up at startup, which loads trouble on every
 -- start (~2.5ms). This stand-in provides the same actions and loads the real module only when one is used.
 -- trouble itself also requires the module when it registers its sources (`:Trouble ...`) and would get the
 -- stand-in back, so every other field (config, get, ...) is forwarded to the real module as well.

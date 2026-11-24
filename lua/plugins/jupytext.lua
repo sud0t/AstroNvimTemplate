@@ -3,8 +3,8 @@
 -- keeping its outputs. Needs the jupytext CLI (`pipx install jupytext`).
 --
 -- Two gaps in the plugin (unmaintained since 2024) are covered here:
---   * notebooks without `metadata.kernelspec` (made by jupytext, VS Code, some exports) crashed on open
---   * opening a notebook that does not exist yet crashed; it now starts an empty `# %%` buffer and the
+--   * it crashes on a notebook without `metadata.kernelspec` (made by jupytext, VS Code, some exports)
+--   * it crashes on a notebook that does not exist yet; here that starts an empty `# %%` buffer and the
 --     notebook is created on the first :w
 
 local language_extensions = { python = "py", julia = "jl", r = "r", R = "r", bash = "sh" }

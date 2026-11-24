@@ -323,7 +323,7 @@ return {
       require("luasnip.loaders.from_snipmate").lazy_load()
       require("luasnip.loaders.from_lua").lazy_load()
       -- Reloading a buffer (`:e!`, a file changed on disk) removes the marks of the snippet it was in the middle of,
-      -- but LuaSnip keeps the snippet as active: the next InsertLeave or expansion then failed with "Invalid
+      -- but LuaSnip keeps the snippet as active: the next InsertLeave or expansion then fails with "Invalid
       -- 'end_row'", which can leave LuaSnip locked (no snippet expands until Neovim is restarted). Forget it.
       vim.api.nvim_create_autocmd("BufReadPost", {
         group = vim.api.nvim_create_augroup("luasnip_buffer_reload", { clear = true }),

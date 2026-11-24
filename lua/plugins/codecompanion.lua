@@ -1,26 +1,17 @@
--- CodeCompanion (imported from AstroCommunity in community.lua). The chat uses the AI chosen with <Leader>As
--- (lua/user/ai/init.lua): Claude, another provider's model (lua/user/ai/providers.lua), or by default a local
--- Ollama model (<Leader>AS, Local model, changes which):
+-- CodeCompanion (imported from AstroCommunity in community.lua): the chat <Leader>AC opens for every AI but
+-- Claude through the Claude Code login, which gets Claude Code itself (lua/user/ai/init.lua, `open_chat`). The
+-- other <Leader>A actions talk to the provider directly, without CodeCompanion (lua/user/ai/).
+-- The chat uses the AI chosen with <Leader>As: Claude, another provider's model (lua/user/ai/providers.lua),
+-- or by default a local Ollama model (<Leader>AS, Local model, changes which):
 -- qwen3:4b-instruct (2.5GB), the same model <Leader>AR uses, so the two share one copy in memory. It mostly fits
 -- in the T1000's 4GB next to the desktop (measured: ~70% of it on the GPU with 1.7GB of VRAM taken by other
 -- programs, 7 tokens/s). qwen2.5-coder:7b (4.7GB) never fits: a third of it on the GPU, half that speed.
 -- num_ctx is kept at 8k: enough for a ~600 line file, while the KV cache stays small enough
--- to leave most layers on the GPU (inline completion lives in plugins/minuet.lua).
--- <Leader>AR (review and fix in place) lives in lua/user/ai/review.lua and <Leader>Ai (inline prompt) in
--- lua/user/ai/inline.lua; both talk to the chosen provider directly, without CodeCompanion, and show the answer
--- while it is written (user/ai/stream.lua).
--- <Leader>Ac writes a commit message for the current diff: straight into the buffer when committing, in a chat
--- otherwise (lua/user/ai/commit.lua; the chat is "Commit message" in the prompt library below).
+-- to leave most layers on the GPU.
 -- The chat's tools are sandboxed by lua/user/ai/sandbox.lua (rules in srt-ai.json): commands run under srt, file
 -- tools stay inside the project and away from the keyring, the password vault, browser profiles and everything
 -- that runs as code outside the sandbox (the editor's own files, .git, shell startup files). When the sandbox
 -- cannot be put in place the chat starts without tools (`locked_down` below).
--- <Leader>AS (lua/user/ai/settings.lua) has the settings: the chat rules of the active provider, the local model,
--- how detailed commit messages are.
--- <Leader>AC is the chat of the AI chosen (lua/user/ai/init.lua, `open_chat`), always as a buffer in the current
--- window: with Claude through the Claude Code login it is Claude Code itself, in a terminal buffer
--- (lua/user/ai/claude_code.lua), and with anything else the chat here, shown and hidden in turn in the
--- window (no split; the chat <Leader>Ac opens for a commit message keeps its split).
 
 local prompt_library = {
   -- <Leader>Ac, `:CodeCompanion /commitmsg`; the diff comes from lua/user/ai/commit.lua
@@ -254,7 +245,7 @@ return {
         maps.x["<Leader>Ac"] = nil
         maps.n["<Leader>Ac"] = { function() require("user.ai.commit").open() end, desc = "Write commit message (diff)" }
         -- <Leader>Ai: prompt the model from inside the buffer (lua/user/ai/inline.lua). It takes the place of
-        -- CodeCompanion's inline assistant (visual <Leader>Aq), which had no normal mode key and does not show
+        -- CodeCompanion's inline assistant (visual <Leader>Aq), which has no normal mode key and does not show
         -- the answer while it is written.
         local inline = function() require("user.ai.inline").run() end
         maps.n["<Leader>Ai"] = { inline, desc = "Inline prompt (write at cursor)" }
@@ -399,7 +390,7 @@ return {
         -- tools and the project's instructions, which is what .nvim-ai.md needs your approval for.
         skills = { dirs = { "~/.config/codecompanion/skills", "~/.agents/skills", "~/.claude/skills" } },
         opts = {
-          log_level = "ERROR", -- DEBUG logged every request in full
+          log_level = "ERROR", -- DEBUG logs every request in full
         },
       })
     end)

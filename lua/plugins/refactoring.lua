@@ -1,7 +1,7 @@
 -- refactoring.nvim (imported from AstroCommunity in community.lua). Every refactor is an operator: in normal
 -- mode it waits for a motion/textobject (`<Leader>re` then `ip`, `_` = current line, ...), in visual mode it
 -- uses the selection. The community mappings are replaced: they predate the current refactoring.nvim API,
--- overlap (`<Leader>rb` / `<Leader>rbf` made `rb` wait for the timeout) and were also set in select mode,
+-- overlap (`<Leader>rb` / `<Leader>rbf` make `rb` wait for the timeout) and are also set in select mode,
 -- where typing a space into a snippet placeholder would trigger them.
 
 local function refactor(name, opts)
@@ -13,7 +13,7 @@ end
 
 -- Inline variable/function, started from the definition. From a usage, basedpyright answers
 -- `textDocument/references` with includeDeclaration = false by leaving out the *requested* position instead of the
--- declaration, so refactoring.nvim deleted the definition but never replaced the usage. Jumping to the definition
+-- declaration, so refactoring.nvim deletes the definition but never replaces the usage. Jumping to the definition
 -- first (in the same buffer) avoids that and works the same for every language server.
 local function inline_from_definition(name)
   return function()

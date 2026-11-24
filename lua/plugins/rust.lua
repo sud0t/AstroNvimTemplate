@@ -98,8 +98,8 @@ return {
   {
     "mrcjkb/rustaceanvim",
     -- rustaceanvim starts rust-analyzer from its ftplugin, on the FileType event, which for the first file of a
-    -- session comes before `User AstroFile` loads AstroLSP. rust-analyzer then started with the plain nvim-lspconfig
-    -- config: no clippy, no `target/` exclusion and none of the capabilities the LSP packs add (blink.cmp snippets).
+    -- session comes before `User AstroFile` loads AstroLSP. rust-analyzer would then start with the plain
+    -- nvim-lspconfig config: no clippy, no `target/` exclusion and none of the capabilities the LSP packs add (blink.cmp snippets).
     -- Loading AstroLSP first registers its `vim.lsp.config` entries before the server starts.
     dependencies = { "AstroNvim/astrolsp" },
     -- the pack's `config` already writes these opts into `vim.g.rustaceanvim`
@@ -157,12 +157,13 @@ return {
         -- itself when the configuration says `sourceLanguages = { "rust" }`, so this is redundant anyway.
         load_rust_types = false,
         -- otherwise rustaceanvim runs `cargo build` for every target as soon as rust-analyzer attaches (loading
-        -- nvim-dap and dap-ui along the way) just to pre-fill `:DapContinue`; the mappings build on demand instead
+        -- nvim-dap and its UI along the way) just to pre-fill `:DapContinue`; the mappings build on demand instead
         autoload_configurations = false,
         -- rustaceanvim's default configuration plus the debug console: like the C/C++ configurations in
-        -- plugins/dap.lua, print to the dap-ui REPL pane, since codelldb's terminal loses the output of programs
-        -- that exit right away. For a program that reads stdin, `:DapContinue` has the "(terminal, for input)"
-        -- configurations with a path prompt (target/debug/<name>). Note: setting this skips `.vscode/launch.json`.
+        -- plugins/dap.lua, print to the REPL tab of the debug window, since codelldb's terminal loses the output of
+        -- programs that exit right away. For a program that reads stdin, `:DapContinue` has the "(terminal, for
+        -- input)" configurations with a path prompt (target/debug/<name>). Note: setting this skips
+        -- `.vscode/launch.json`.
         configuration = {
           name = "Rust (cargo)",
           type = "codelldb",

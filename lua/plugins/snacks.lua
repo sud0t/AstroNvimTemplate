@@ -1,5 +1,3 @@
--- customize dashboard options
-
 ---@type LazySpec
 return {
   "folke/snacks.nvim",

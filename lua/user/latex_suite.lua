@@ -46,7 +46,7 @@ local display_zones =
 
 -- vimtex answers from synstack(), which comes back empty the first time it is asked after several characters went
 -- into the line with no redraw in between (keys typed faster than the screen updates, a paste, a macro): `sum` typed
--- quickly stayed `sum`. Asked again it has the syntax state, so a "no" is only taken on the second answer.
+-- quickly would stay `sum`. Asked again it has the syntax state, so a "no" is only taken on the second answer.
 local function in_mathzone(...)
   local in_zone = vim.fn["vimtex#syntax#in_mathzone"]
   return in_zone(...) == 1 or in_zone(...) == 1
@@ -494,14 +494,12 @@ end
 
 --- buffer-local keys for a tex buffer
 function M.attach(buf)
-  -- visual snippets: cut the selection, then type the trigger
   vim.keymap.set(
     "x",
     "<Tab>",
     require("luasnip.util.select").cut_keys .. "<Cmd>lua require('user.latex_suite').mark_selection()<CR>",
     { buffer = buf, desc = "Cut selection for a LaTeX Suite visual snippet" }
   )
-  -- plain newline in a matrix
   vim.keymap.set("i", "<S-CR>", "<CR>", { buffer = buf, desc = "Newline without \\\\" })
 end
 
