@@ -13,20 +13,14 @@
 -- buffer-local to Python buffers already, see plugins/python.lua)
 local code_prefixes = { "d", "r", "tn" }
 
--- shadow every matching global mapping with a buffer-local no-op that which-key hides,
--- so the keys do nothing and the emptied groups drop out of the popup
 local function hide_code_maps(buf)
   local leader = vim.g.mapleader
-  for _, mode in ipairs { "n", "x" } do
-    for _, map in ipairs(vim.api.nvim_get_keymap(mode)) do
-      for _, prefix in ipairs(code_prefixes) do
-        if vim.startswith(map.lhs, leader .. prefix) then
-          vim.keymap.set(mode, map.lhs, function() end, { buffer = buf, desc = "which_key_ignore" })
-          break
-        end
-      end
+  require("user.hidden_keys").hide(buf, function(lhs)
+    for _, prefix in ipairs(code_prefixes) do
+      if vim.startswith(lhs, leader .. prefix) then return true end
     end
-  end
+    return false
+  end)
 end
 
 -- vimtex's dict functions return v:true/v:false or 1/0 depending on the code path

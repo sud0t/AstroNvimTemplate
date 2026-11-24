@@ -40,7 +40,7 @@ local function special(name)
   return table.concat(mods, "+")
 end
 
---- The keys of a mapping as they are pressed: "<C-W>d" -> "Ctrl+w d", "[<Space>" -> "[ Space", "gcc" -> "gcc"
+--- The keys of a mapping as they are pressed: "<C-W>d" -> "Ctrl+w d", "[<Space>" -> "[ Space", "gx" -> "gx"
 local function keys(map)
   local lhs = vim.fn.keytrans(map.lhsraw or map.lhs)
   local parts, plain = {}, ""

@@ -1,5 +1,5 @@
 -- jupytext.nvim: open .ipynb notebooks as plain text with `# %%` cells ("hydrogen" style), the same format as
--- the molten cell runner in plugins/jupyter.lua (<Leader>J, <Leader>j...). Saving writes the .ipynb back,
+-- the molten cell runner in plugins/jupyter.lua (<Leader>j...). Saving writes the .ipynb back,
 -- keeping its outputs. Needs the jupytext CLI (`pipx install jupytext`).
 --
 -- Two gaps in the plugin (unmaintained since 2024) are covered here:

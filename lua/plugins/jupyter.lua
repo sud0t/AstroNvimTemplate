@@ -60,15 +60,8 @@ return {
     keys = function()
       local keys = {
         -- first press in a file: molten asks which kernel to start, then runs the cell
-        {
-          "<leader>J",
-          function() require("user.jupyter").run_cell(true) end,
-          desc = "Jupyter: run cell and move to next",
-        },
-        { "<leader>jc", function() require("user.jupyter").run_cell(false) end, desc = "Jupyter: run cell" },
+        { "<leader>jc", function() require("user.jupyter").run_cell() end, desc = "Jupyter: run cell" },
         { "<leader>ja", function() require("user.jupyter").run_all() end, desc = "Jupyter: run all cells" },
-        { "]j", function() require("user.jupyter").jump(1) end, desc = "Next cell" },
-        { "[j", function() require("user.jupyter").jump(-1) end, desc = "Previous cell" },
         { "<leader>jv", ":<C-u>MoltenEvaluateVisual<CR>", mode = "x", silent = true, desc = "Jupyter: run selection" },
         { "<leader>jo", ":noautocmd MoltenEnterOutput<CR>", silent = true, desc = "Jupyter: open full output" },
         { "<leader>jh", "<cmd>MoltenHideOutput<CR>", desc = "Jupyter: hide output" },

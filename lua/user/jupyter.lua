@@ -1,4 +1,4 @@
--- Minimal `# %%` cell runner on top of molten-nvim (used by the <leader>J / <leader>j keymaps in plugins/jupyter.lua).
+-- Minimal `# %%` cell runner on top of molten-nvim (used by the <leader>j keymaps in plugins/jupyter.lua).
 -- A cell is everything between two `# %%` lines; code above the first marker is the first cell.
 local jupyter = {}
 
@@ -40,33 +40,19 @@ local function run_range(first, last)
   return ok
 end
 
---- Jump to the next (dir = 1) or previous (dir = -1) `# %%` line. Returns false if there is none.
-function jupyter.jump(dir, onto_code)
-  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local row = vim.api.nvim_win_get_cursor(0)[1]
-  for i = row + dir, dir > 0 and #lines or 1, dir do
-    if is_marker(lines[i]) then
-      vim.api.nvim_win_set_cursor(0, { math.min(i + (onto_code and 1 or 0), #lines), 0 })
-      return true
-    end
-  end
-  return false
-end
-
-function jupyter.run_cell(move_on)
+function jupyter.run_cell()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   local first, last = cell_range(lines, vim.api.nvim_win_get_cursor(0)[1])
   if first then
-    if not run_range(first, last) then return end
+    run_range(first, last)
   else
     vim.notify "Jupyter: nothing to run in this cell"
   end
-  if move_on then jupyter.jump(1, true) end
 end
 
 function jupyter.run_all()
   if #vim.fn.MoltenRunningKernels(true) == 0 then
-    vim.notify("Jupyter: no kernel in this buffer yet. Run a cell with <leader>J first.", vim.log.levels.WARN)
+    vim.notify("Jupyter: no kernel in this buffer yet. Run a cell with <leader>jc first.", vim.log.levels.WARN)
     return
   end
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)

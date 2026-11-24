@@ -50,7 +50,13 @@ return {
         ["<C-e>"] = { "<End>", desc = "move end of line" },
       },
       n = {
-        ["<Leader>ue"] = { "<Cmd>Precognition toggle<CR>", desc = "Toggle precognition" },
+        ["<Leader>n"] = false, -- AstroNvim's new file (the dashboard's New File entry runs :enew, plugins/snacks.lua)
+        ["<Leader>Q"] = false, -- AstroNvim's exit
+        ["<C-Q>"] = false, -- AstroNvim's force quit; spelled as AstroNvim spells it, or its mapping stays
+        -- commenting is on <Leader>/ alone: it runs Neovim's own gc/gcc mappings, which polish.lua moves to these names
+        ["<Leader>/"] = { "<Plug>(comment-line)", remap = true, desc = "Toggle comment line" },
+        gco = false, -- AstroNvim's add comment below and above
+        gcO = false,
         ["<Leader>k"] = { function() require("user.cheatsheet").open() end, desc = "Keys cheat sheet (non-leader)" },
         ["<Leader>C"] = false, -- AstroNvim's force close buffer: <Leader>X does that
         ["<Leader>c"] = { false, desc = "Folds close/open" }, -- `false` drops AstroNvim's close buffer, keeping only the group
@@ -78,6 +84,9 @@ return {
           desc = "Previous buffer",
         },
         ["<Leader>z"] = { desc = "Quickfix/Lists" },
+      },
+      x = {
+        ["<Leader>/"] = { "<Plug>(comment-operator)", remap = true, desc = "Toggle comment" },
       },
       t = {
         ["<C-x>"] = { "<C-\\><C-n>", desc = "Exit terminal mode" },
