@@ -8,15 +8,20 @@
 -- It is one terminal buffer, used with the keys of every other buffer. The prompt is its insert mode
 -- (terminal mode: what you type goes to Claude Code), and what Claude Code has printed above it is text:
 --   <Esc>         leaves the prompt, as it leaves insert mode. j k and the other motions then go up into the
---                 conversation, / searches it, v V select and y yanks; `\` is the file tree and <Leader>…
---                 what it is everywhere. i a I A go back to the prompt, and p pastes into it.
---   <C-k>         from the prompt: up, into the conversation (as <Esc>)
---   <C-j>         from the conversation: down, to the prompt (as i)
---   <C-h> <C-l>   the window on that side, as everywhere; so are <C-j> at the prompt and <C-k> above it
+--                 conversation, <C-u> <C-d> scroll it, / searches it, v V select and y yanks; `\` is the file
+--                 tree and <Leader>… what it is everywhere. i a I A go back to the prompt, and p pastes
+--                 into it.
+--   <C-h> <C-j> <C-k> <C-l>
+--                 at the prompt: the arrow keys, as in insert mode. Left and right move in the line; up and
+--                 down move between the lines of the prompt, from its first and last one to the prompts
+--                 before, and choose in Claude Code's menus. (Left in an empty prompt is Claude Code's agent
+--                 view.) Above the prompt they are the window on that side, as everywhere.
 --   <Esc>         above the prompt is Claude Code's own Escape: it stops Claude, closes a menu
+--   <C-r>         above the prompt is Claude Code's Ctrl+L: it draws its screen again, for when what is
+--                 there is not what should be (rows drawn over each other, text as narrow as the window was)
 --   <CR>          above the prompt opens what the cursor is on: a web address in the browser, a file in this
 --                 window, at `path:12:3` when it says so (lua/user/ai/claude_links.lua)
---   <S-CR>        a new line in the prompt (so is `\` then <CR>; <C-j> is the window below, see above)
+--   <S-CR>        a new line in the prompt (so is `\` then <CR>)
 --   <C-x>         leaves the prompt, as in every terminal. Above the prompt it is Claude Code's own Ctrl+X,
 --                 with the key after it: its Ctrl+X Ctrl+K is <C-x><C-x><C-k> from the prompt, and you are
 --                 at the prompt again (<C-x><Esc>: nothing)
@@ -24,8 +29,14 @@
 -- Nothing else is mapped here. <Leader>fc, <Leader>x, gx, <Tab> and the rest are the global mappings, and a
 -- file opened from the file tree or a picker goes where it goes from any terminal (a split of its own, when
 -- this is the only window). Like every terminal the buffer cannot be edited (x, dd, u say so): the prompt
--- is edited at the prompt, or with Claude Code's Ctrl+G in a Neovim of its own, which gets <Esc> while it is
--- open.
+-- is edited at the prompt, or with Claude Code's Ctrl+G in a Neovim of its own, which gets <Esc> and the
+-- other keys of the prompt while it is open.
+--
+-- The prompt is at the bottom of the window. Claude Code itself starts on the terminal's first row, and
+-- leaves the rows under its prompt empty whenever what it shows gets shorter (a menu closes): at the prompt
+-- the window is kept with those rows below it, out of sight, and has as many empty ones at its top
+-- (`pin`). Above the prompt the window is Neovim's to scroll, and G goes to the last of those rows. For
+-- the pin 'scrolloff' is 0 in a window while it shows the session.
 --
 -- Claude Code runs as `claude` does in the shell (where a function of the same name adds the first of
 -- these), with what makes it a buffer:
@@ -222,12 +233,18 @@ local function keys(buf)
     if handed_over() then return pass "<Esc>" end
     vim.cmd.stopinsert()
   end, "Leave the prompt (normal mode)")
-  map("t", "<C-k>", function()
-    if handed_over() then return vim.cmd.wincmd "k" end -- (what the key is in every terminal)
-    vim.cmd.stopinsert()
-  end, "Up: from the prompt into the conversation")
-  map("n", "<C-j>", function() vim.cmd.startinsert() end, "Down: from the conversation to the prompt")
+  -- the arrow keys, as these are in insert mode (lua/plugins/astrocore.lua). Typed, not sent: the terminal
+  -- then says an arrow the way the program has asked for it, of the two there are
+  for _, key in ipairs {
+    { "<C-h>", "<Left>", "Left in the prompt" },
+    { "<C-j>", "<Down>", "Down in the prompt, or to a later one" },
+    { "<C-k>", "<Up>", "Up in the prompt, or to an earlier one" },
+    { "<C-l>", "<Right>", "Right in the prompt" },
+  } do
+    map("t", key[1], function() pass(handed_over() and key[1] or key[2]) end, key[3])
+  end
   map("n", "<Esc>", function() send "\27" end, "Claude Code's Escape (stop, close a menu)")
+  map("n", "<C-r>", function() send "\12" end, "Claude Code's Ctrl+L (draw its screen again)")
   -- Ctrl+X starts some of Claude Code's commands (Ctrl+X Ctrl+K). The key after it is read here and both
   -- are typed at the prompt past the mappings: there <C-k> and others are the editor's
   map("n", "<C-x>", function()
@@ -250,6 +267,57 @@ local function keys(buf)
     open_target,
     { buffer = buf, desc = "Open the link or file under the cursor", nowait = true }
   )
+end
+
+-------------------------------------------------------------------------------------------------- the pin
+
+-- the empty rows at the top of the window: the lines of one mark in the session's buffer
+local filler = { ns = vim.api.nvim_create_namespace "user.ai.claude_code.filler", id = 1 }
+
+--- Put the last row Claude Code uses on the last row of the current window, when that shows `buf` (see the
+--- top of this file): the empty rows under it go below the window, which starts that many rows higher.
+--- At the prompt it cannot start higher. There Neovim puts the terminal's first row at the top of the
+--- window whenever it looks, and keeps only filler rows above that one ('topfill'): so the rows on top are
+--- filler there, and empty. Above the prompt they are the rows of the conversation, and filler only where
+--- it has none. (A second window on the session has the filler where the first one's is.)
+local function pin(buf)
+  local win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_get_buf(win) ~= buf then return end
+  local count = vim.api.nvim_buf_line_count(buf)
+  -- (the terminal is the last rows of its buffer, as many as the window has)
+  local first = math.max(count - vim.api.nvim_win_get_height(win) + 1, 1)
+  -- the last row in use: the cursor's, or one under it with something on it
+  local used = vim.api.nvim_win_get_cursor(win)[1]
+  local below = vim.api.nvim_buf_get_lines(buf, used, count, false)
+  for i = #below, 1, -1 do
+    if below[i]:find "%S" then
+      used = used + i
+      break
+    end
+  end
+  local empty = count - used
+  local top = math.max(first - empty, vim.api.nvim_get_mode().mode == "t" and first or 1)
+  local fill = empty - (first - top)
+
+  local mark = vim.api.nvim_buf_get_extmark_by_id(buf, filler.ns, filler.id, { details = true })
+  local had = mark[1] and #mark[3].virt_lines or 0
+  if fill == 0 then
+    vim.api.nvim_buf_del_extmark(buf, filler.ns, filler.id)
+  elseif mark[1] ~= top - 1 or had ~= fill then
+    local rows = {}
+    for i = 1, fill do
+      rows[i] = { { "" } }
+    end
+    vim.api.nvim_buf_set_extmark(
+      buf,
+      filler.ns,
+      top - 1,
+      0,
+      { id = filler.id, virt_lines = rows, virt_lines_above = true }
+    )
+  end
+  local view = vim.fn.winsaveview()
+  if view.topline ~= top or view.topfill ~= fill then vim.fn.winrestview { topline = top, topfill = fill } end
 end
 
 ---------------------------------------------------------------------------------------------- the session
@@ -369,6 +437,15 @@ local function launch(win)
   vim.bo[buf].bufhidden = "hide"
   vim.b[buf].claude_code = true
   keys(buf)
+  -- at the prompt Neovim has 'scrolloff' at 0 itself; above it the rows `pin` keeps below the window would
+  -- be scrolled back in to have that many under the cursor. (Set for this buffer in a window, as the
+  -- options of every terminal are: a window has it for the session alone, and gets it with the session.)
+  vim.wo[win][0].scrolloff = 0
+  -- when the prompt is entered and left, and when what the terminal shows has changed
+  vim.api.nvim_create_autocmd({ "TermEnter", "TextChangedT", "TermLeave" }, {
+    buffer = buf,
+    callback = function() pin(buf) end,
+  })
   vim.cmd.startinsert()
 end
 

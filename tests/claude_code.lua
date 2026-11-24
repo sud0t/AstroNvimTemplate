@@ -12,10 +12,10 @@
 --       mode, and it is the only one: no block beside it.
 --    2. Ask it to read ~/.zshrc: refused (reads outside the directory, as `claude` in the shell).
 --    3. <Esc>: normal mode, the statusline in its colour, the cursor a block where the caret was. k goes up
---       out of the prompt into the conversation; v and k select upwards and y yanks; / searches. i is the
---       prompt again. <C-k> and <C-j> are the same two steps.
+--       out of the prompt into the conversation, <C-u> and <C-d> scroll it; v and k select upwards and y
+--       yanks; / searches. i is the prompt again, and nothing in the window has moved.
 --    4. While Claude works, <Esc> <Esc> stops it (the first leaves the prompt, the second is Claude Code's).
---       In one of its menus the arrows, j k and <CR> choose, as long as you are at the prompt.
+--       In one of its menus the arrows, <C-j> <C-k>, j k and <CR> choose, as long as you are at the prompt.
 --    5. `\`: the file tree, and Claude Code draws itself again in the narrower window; `\` once more. Then gg
 --       and scroll down: is the conversation there once, or are parts of it repeated? The same question
 --       after /compact, and after Ctrl+O twice.
@@ -39,6 +39,19 @@
 --       its chat in a split.
 --   14. <Leader>AC from a file of this configuration asks before it starts Claude Code here; so it does from
 --       ~/.config and from ~.
+--   15. The prompt is on the last rows of the window: in a new session, with nothing said yet; after `/` and
+--       <Esc> (a menu opens and closes); after /clear; and while the first answers come in, without the
+--       window jumping. With a long conversation, a menu that closes leaves empty rows at the top of the
+--       window, not under the prompt.
+--   16. At the prompt <C-h> and <C-l> move in the line. In a prompt of several lines <C-k> and <C-j> move
+--       between them, and from the first and the last through the prompts before. <C-h> in an empty prompt
+--       opens the agent view. After <Esc> the four are the windows.
+--   17. Type a prompt until it takes a second row: the box stays whole (a rule above and below it, its mark
+--       at the start). If it does not, <Esc> <C-r> draws it again; and whether it also breaks in a terminal
+--       without Neovim says where the fault is:
+--         CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 CLAUDE_CODE_NATIVE_CURSOR=1 claude --settings '{"tui":"default"}'
+--   18. A window beside Neovim's and away again (narrower, then as wide as before): what was printed stays
+--       as narrow as it was, and <Esc> <C-r> prints it again at the window's width.
 local uv = vim.uv
 
 local repo = vim.fs.dirname(vim.fs.dirname(assert(uv.fs_realpath(debug.getinfo(1, "S").source:sub(2)))))
@@ -131,10 +144,10 @@ vim.fn.confirm = function(question)
 end
 vim.ui.open = function(what) opened[#opened + 1] = what end
 -- (a key handed on to the program in the terminal: there is no terminal mode here for it to arrive in)
-local fed_escaped
-vim.api.nvim_feedkeys = function(keys, _, escape)
+local fed_mode, fed_escaped
+vim.api.nvim_feedkeys = function(keys, mode, escape)
   fed[#fed + 1] = keys
-  fed_escaped = escape
+  fed_mode, fed_escaped = mode, escape
 end
 -- (and no keyboard: the key that is typed after <C-x>)
 vim.fn.getcharstr = function() return table.remove(typed, 1) or "" end
@@ -512,12 +525,12 @@ ok(
 -- the keys
 ok(
   "the prompt's own keys are these, and no more",
-  vim.deep_equal(mapped(term, "t"), codes { "<Esc>", "<C-k>", "<S-CR>", "<C-z>" }),
+  vim.deep_equal(mapped(term, "t"), codes { "<Esc>", "<C-h>", "<C-j>", "<C-k>", "<C-l>", "<S-CR>", "<C-z>" }),
   vim.inspect(vim.tbl_map(function(map) return map.lhs end, vim.api.nvim_buf_get_keymap(term, "t")))
 )
 ok(
   "and these above it",
-  vim.deep_equal(mapped(term, "n"), codes { "<Esc>", "<C-j>", "<C-x>", "<CR>" }),
+  vim.deep_equal(mapped(term, "n"), codes { "<Esc>", "<C-r>", "<C-x>", "<CR>" }),
   vim.inspect(vim.tbl_map(function(map) return map.lhs end, vim.api.nvim_buf_get_keymap(term, "n")))
 )
 ok(
@@ -542,8 +555,8 @@ typed = { "\11" }
 press("n", "<C-X>")
 ok(
   "<C-x> above the prompt types Ctrl+X and the key after it at the prompt, past the mappings",
-  #fed == 1 and fed[1] == "i\24\11" and fed_escaped == true,
-  vim.inspect { fed, fed_escaped }
+  #fed == 1 and fed[1] == "i\24\11" and fed_mode == "n" and fed_escaped == true,
+  vim.inspect { fed, fed_mode, fed_escaped }
 )
 fed, typed = {}, { vim.keycode "<Left>" }
 press("n", "<C-X>")
@@ -564,13 +577,28 @@ ok(
   wait_for(function() return keys_sent() == "\n\27" end),
   vim.inspect(keys_sent())
 )
+press("n", "<C-R>")
+ok(
+  "<C-r> from normal mode is Claude Code's Ctrl+L",
+  wait_for(function() return keys_sent() == "\n\27\12" end),
+  vim.inspect(keys_sent())
+)
+local arrows = { { "<C-H>", "<Left>" }, { "<C-J>", "<Down>" }, { "<C-K>", "<Up>" }, { "<C-L>", "<Right>" } }
+for _, key in ipairs(arrows) do
+  fed, fed_mode = {}, nil
+  press("t", key[1])
+  ok(
+    ("%s at the prompt is %s, typed past the mappings"):format(key[1], key[2]),
+    #fed == 1 and fed[1] == vim.keycode(key[2]) and fed_mode == "n",
+    vim.inspect { fed, fed_mode }
+  )
+end
+fed = {}
 press("t", "<Esc>")
-press("t", "<C-K>")
-press("n", "<C-J>")
 vim.wait(100)
 ok(
-  "leaving the prompt and going back send it nothing",
-  keys_sent() == "\n\27" and #fed == 0,
+  "leaving the prompt sends it nothing, and the arrows went as keys",
+  keys_sent() == "\n\27\12" and #fed == 0,
   vim.inspect { keys_sent(), fed }
 )
 ok(
@@ -814,13 +842,15 @@ if uv.fs_stat "/proc/self/task" then
     #fed == 1 and fed[1] == vim.keycode "<S-CR>" and keys_sent() == "",
     vim.inspect { fed, keys_sent() }
   )
-  vim.cmd "leftabove split"
-  local above = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(above, file_buf)
-  vim.cmd.wincmd "j"
-  press("t", "<C-K>")
-  ok("and <C-k> is the window above, as in every terminal", vim.api.nvim_get_current_win() == above)
-  vim.api.nvim_win_close(above, true)
+  for _, key in ipairs(arrows) do
+    fed, fed_mode = {}, nil
+    press("t", key[1])
+    ok(
+      ("and %s, not an arrow"):format(key[1]),
+      #fed == 1 and fed[1] == vim.keycode(key[1]) and fed_mode == "n",
+      vim.inspect { fed, fed_mode }
+    )
+  end
 
   with_child "command"
   press("t", "<Esc>")
@@ -1005,6 +1035,149 @@ do
     fine and #hidden == 1 and hidden[1].keep_window == nil,
     err or vim.inspect(hidden)
   )
+end
+
+------------------------------------------------------------------------------------------------------ the pin
+
+-- Where the window is, at the prompt and above it. Seen in another Neovim, which has what a script's has
+-- not: terminal mode, in which the window follows its terminal.
+do
+  -- `claude`: three rows of conversation, then a frame of four with the cursor in its second. A key at a
+  -- time: o prints a row above the frame, m opens a menu of five rows under it, c closes that.
+  write(base .. "/pin/claude", {
+    "#!/bin/sh",
+    [[here() { printf '\r\033[8C'; }]],
+    [[frame() { printf -- '----------\r\nPROMPT> \r\n----------\r\nFOOTER\033[2A'; here; }]],
+    [[printf 'one\r\ntwo\r\nthree\r\n']],
+    "stty raw -echo",
+    "frame",
+    [[while key=$(dd bs=1 count=1 2>/dev/null) && [ -n "$key" ]; do]],
+    [[  case "$key" in]],
+    [[    o) printf '\033[1A\r\033[Jmore\r\n'; frame ;;]],
+    [[    m) printf '\033[2B\r\nMENU 1\r\nMENU 2\r\nMENU 3\r\nMENU 4\r\nMENU 5\033[7A'; here ;;]],
+    [[    c) printf '\033[3B\r\033[J\033[3A'; here ;;]],
+    "  esac",
+    "done",
+  })
+  vim.fn.setfperm(base .. "/pin/claude", "rwxr-xr-x")
+  local child = vim.fn.jobstart({ vim.v.progpath, "--embed", "--headless", "--clean", "-i", "NONE" }, {
+    rpc = true,
+    cwd = project,
+    env = { PATH = base .. "/pin:" .. vim.env.PATH },
+  })
+  local function run(code, ...) return vim.rpcrequest(child, "nvim_exec_lua", code, { ... }) end
+  local function type_keys(keys) vim.rpcrequest(child, "nvim_input", keys) end
+  --- What the window shows: rows are the screen's, 0 for one that is not in the window.
+  local function seen()
+    return run [[
+      local win, buf = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+      local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      local function row(text)
+        for lnum = #lines, 1, -1 do
+          if lines[lnum]:find(text, 1, true) then return vim.fn.screenpos(win, lnum, 1).row end
+        end
+        return 0
+      end
+      local view, cursor = vim.fn.winsaveview(), vim.api.nvim_win_get_cursor(win)
+      return {
+        mode = vim.api.nvim_get_mode().mode,
+        last = vim.fn.win_screenpos(win)[1] + vim.api.nvim_win_get_height(win) - 1,
+        footer = row "FOOTER",
+        prompt = row "PROMPT>",
+        menu = row "MENU 5",
+        cursor = vim.fn.screenpos(win, cursor[1], cursor[2] + 1).row,
+        top = lines[view.topline],
+        filler = view.topfill,
+        scrollback = #lines - vim.api.nvim_win_get_height(win),
+        scrolloff = vim.wo[win].scrolloff,
+      }
+    ]]
+  end
+  local s
+  --- Wait until what the window shows is as `cond` says; `s` is then what it shows.
+  local function shows(cond)
+    return wait_for(function()
+      s = seen()
+      return cond(s)
+    end)
+  end
+  local function at_bottom(what) return s[what] == s.last and s.cursor == s.prompt end
+
+  run(
+    [[
+    vim.opt.rtp:prepend(...)
+    vim.o.swapfile = false
+    vim.o.scrolloff = 10
+    require("user.ai.claude_code").open()
+  ]],
+    repo
+  )
+  ok(
+    "a session starts with its prompt at the bottom of the window, and empty rows above what it has said",
+    shows(function() return s.mode == "t" and s.prompt > 0 and at_bottom "footer" end)
+      and s.filler > 0
+      and s.scrollback == 0,
+    vim.inspect(s)
+  )
+  type_keys "m"
+  ok(
+    "a menu under the prompt takes the rows it needs",
+    shows(function() return at_bottom "menu" end) and s.footer == s.last - 5,
+    vim.inspect(s)
+  )
+  type_keys "c"
+  ok(
+    "and the prompt is at the bottom again when it closes",
+    shows(function() return s.menu == 0 and at_bottom "footer" end),
+    vim.inspect(s)
+  )
+  type_keys(("o"):rep(30))
+  ok(
+    "with more said than the window holds it is the terminal's own last row",
+    shows(function() return s.scrollback > 10 and at_bottom "footer" end) and s.filler == 0,
+    vim.inspect(s)
+  )
+  type_keys "m"
+  shows(function() return at_bottom "menu" end)
+  type_keys "c"
+  ok(
+    "the rows a menu leaves under the prompt are then empty rows at the top of the window",
+    shows(function() return s.menu == 0 and at_bottom "footer" end) and s.filler == 5 and s.mode == "t",
+    vim.inspect(s)
+  )
+  type_keys "<Esc>"
+  ok(
+    "above the prompt they are rows of the conversation, and the prompt stays where it is",
+    shows(function() return s.mode == "nt" end) and at_bottom "footer" and s.filler == 0 and s.top == "more",
+    vim.inspect(s)
+  )
+  ok("for which 'scrolloff' is 0 in the window of the session", s.scrolloff == 0, vim.inspect(s))
+  type_keys "i"
+  ok(
+    "and at the prompt again as before",
+    shows(function() return s.mode == "t" and s.filler == 5 end) and at_bottom "footer",
+    vim.inspect(s)
+  )
+  type_keys "<Esc>"
+  shows(function() return s.mode == "nt" end)
+  local elsewhere = run [[
+    vim.cmd.enew()
+    local file = vim.wo.scrolloff
+    vim.cmd.vnew()
+    require("user.ai.claude_code").open()
+    return { file = file, session = vim.wo.scrolloff }
+  ]]
+  ok(
+    "another buffer in the window has its own 'scrolloff', and another window with the session this one",
+    elsewhere.file == 10 and elsewhere.session == 0,
+    vim.inspect(elsewhere)
+  )
+  ok(
+    "<Leader>AC in another window: the prompt at the bottom of that one",
+    shows(function() return s.mode == "t" and at_bottom "footer" end),
+    vim.inspect(s)
+  )
+  vim.fn.jobstop(child)
 end
 
 ---------------------------------------------------------------------------------------------------- result
