@@ -10,7 +10,7 @@ set -u
 # Tests of single modules, in a Neovim that loads no configuration.
 clean_tests=(ai_sandbox ai_sandbox_parts ai_provider claude_code)
 # Tests inside the whole configuration. They call `whole_config()` of tests/harness.lua.
-config_tests=(ai_sandbox_chat comment_keys dap_view git_commit git_keys git jupyter tree_keys)
+config_tests=(ai_sandbox_chat autopairs comment_keys dap_view git_commit git_keys git jupyter markdown_preview neotest_keys tree_keys)
 seconds_per_test=300
 
 # What the configuration loads from the user's data directory: lazy.nvim's plugins, Mason's tools, the
