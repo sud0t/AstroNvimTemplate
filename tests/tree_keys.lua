@@ -19,6 +19,17 @@ local function git(dir, ...)
   return result.stdout
 end
 
+--- Runs `fn` with the notifications it causes collected, not shown, and returns them. `fn` gets the list as well.
+local function with_notifications(fn)
+  local notes, notify = {}, vim.notify
+  ---@diagnostic disable-next-line: duplicate-set-field
+  vim.notify = function(message) notes[#notes + 1] = message end
+  local done, err = pcall(fn, notes)
+  vim.notify = notify
+  if not done then error(err, 0) end
+  return notes
+end
+
 local function tree_state() return require("neo-tree.sources.manager").get_state_for_window() end
 local function source() return vim.bo.filetype == "neo-tree" and vim.b.neo_tree_source or nil end
 local function selected() return vim.tbl_count(tree_state().selected) end
@@ -65,6 +76,7 @@ local function popup(prefix)
 end
 
 local dir = vim.fn.tempname()
+local started_in = vim.fn.getcwd()
 local run, err = xpcall(function()
   vim.fn.mkdir(dir)
   for _, name in ipairs { "a.txt", "b.txt", "c.txt" } do
@@ -89,7 +101,7 @@ local run, err = xpcall(function()
     ok(lhs .. " is not a tree key", own(lhs) == nil, vim.inspect(own(lhs)))
   end
   ok("f filters", mapped_to("f", "filter_on_submit"), vim.inspect(own "f"))
-  for lhs, desc in pairs {
+  local leader_keys = {
     ["<Leader>ff"] = "Find files in this folder",
     ["<Leader>fF"] = "Find all files in this folder",
     ["<Leader>fw"] = "Find words in this folder",
@@ -97,12 +109,29 @@ local run, err = xpcall(function()
     ["<Leader>tf"] = "Terminal in this folder (float)",
     ["<Leader>th"] = "Terminal in this folder (horizontal)",
     ["<Leader>tv"] = "Terminal in this folder (vertical)",
-  } do
-    ok(lhs .. " in Files", mapped_to(lhs, desc), vim.inspect(own(lhs)))
+    ["<Leader>x"] = "Close buffer",
+    ["<Leader>ga"] = "Stage file",
+    ["<Leader>gA"] = "Stage all",
+    ["<Leader>gu"] = "Unstage file",
+    ["<Leader>gt"] = "Stage or unstage file",
+    ["<Leader>gr"] = "Revert file",
+    ["<Leader>gc"] = "Commit",
+    ["<Leader>gg"] = "Commit and push",
+    ["<Leader>gp"] = "Push",
+    ["<Leader>gl"] = "Pull",
+    ["<Leader>gU"] = "Undo last commit",
+  }
+  --- The tree's <Leader> keys are the same in every source, and every key of a source names a command it has.
+  local function check_keys(name)
+    for lhs, desc in pairs(leader_keys) do
+      ok(lhs .. " in " .. name, mapped_to(lhs, desc), vim.inspect(own(lhs)))
+    end
+    for lhs, entry in pairs(tree_state().resolved_mappings) do
+      ok(lhs .. " names a command in " .. name, not entry.text:find "<invalid>", entry.text)
+    end
   end
-  for lhs, entry in pairs(tree_state().resolved_mappings) do
-    ok(lhs .. " names a command", not entry.text:find "<invalid>", entry.text)
-  end
+  local function status() return git(dir, "status", "--porcelain") end
+  check_keys "Files"
 
   local leader = vim.g.mapleader
   for _, mode in ipairs { "n", "x" } do
@@ -113,7 +142,6 @@ local run, err = xpcall(function()
     ok("no global <Leader> key is left in mode " .. mode, #uncovered == 0, table.concat(uncovered, " "))
   end
   ok("<Leader>q does nothing", is_hidden "<Leader>q", vim.inspect(own "<Leader>q"))
-  ok("the Git keys are not in Files", is_hidden "<Leader>gc", vim.inspect(own "<Leader>gc"))
 
   vim.keymap.set("n", "<Leader>~", "<Nop>", { desc = "made after the tree was opened" })
   vim.cmd.wincmd "p"
@@ -142,42 +170,63 @@ local run, err = xpcall(function()
   press "<Esc>"
   ok("<Esc> drops the selection", selected() == 0, selected())
 
-  show("buffers", "a.txt")
-  ok("<Leader>x in Buffers", mapped_to("<Leader>x", "Close buffer"), vim.inspect(own "<Leader>x"))
-  ok("bd is not a tree key", own "bd" == nil, vim.inspect(own "bd"))
-  ok("d is not a tree key in Buffers", own "d" == nil, vim.inspect(own "d"))
-  ok("the find keys are not in Buffers", is_hidden "<Leader>ff", vim.inspect(own "<Leader>ff"))
-  ok("<Tab> selects in Buffers", (own("<Tab>", "x") or {}).desc == "Select the highlighted files")
-
-  show("git_status", "b.txt")
-  local git_keys = {
-    ["<Leader>ga"] = "Stage file",
-    ["<Leader>gA"] = "Stage all",
-    ["<Leader>gu"] = "Unstage file",
-    ["<Leader>gt"] = "Stage or unstage file",
-    ["<Leader>gr"] = "Revert file",
-    ["<Leader>gc"] = "Commit",
-    ["<Leader>gg"] = "Commit and push",
-    ["<Leader>gp"] = "Push",
-    ["<Leader>gl"] = "Pull",
-    ["<Leader>gU"] = "Undo last commit",
-  }
-  for lhs, desc in pairs(git_keys) do
-    ok(lhs .. " in Git", mapped_to(lhs, desc), vim.inspect(own(lhs)))
-  end
-  for _, lhs in ipairs { "A", "ga", "gu", "gt", "gr", "gc", "gg", "gp", "gl", "gU" } do
-    ok(lhs .. " is not a tree key in Git", own(lhs) == nil, vim.inspect(own(lhs)))
-  end
-  for lhs, entry in pairs(tree_state().resolved_mappings) do
-    ok(lhs .. " names a command in Git", not entry.text:find "<invalid>", entry.text)
-  end
   go_to "b.txt"
   press "<Leader>ga"
-  ok("<Leader>ga stages the file", git(dir, "status", "--porcelain") == "M  b.txt\n", git(dir, "status", "--porcelain"))
+  ok("<Leader>ga stages the file in Files", status() == "M  b.txt\n", status())
   wait_for("the staged file", function() return line_of "b.txt" end)
   go_to "b.txt"
   press "<Leader>gu"
-  ok("<Leader>gu unstages it", git(dir, "status", "--porcelain") == " M b.txt\n", git(dir, "status", "--porcelain"))
+  ok("<Leader>gu unstages it in Files", status() == " M b.txt\n", status())
+  wait_for("the unstaged file", function() return line_of "c.txt" end)
+
+  local function open_in_background(name)
+    local buf = vim.fn.bufadd(dir .. "/" .. name)
+    vim.fn.bufload(buf)
+    vim.bo[buf].buflisted = true
+    return buf
+  end
+  local c = open_in_background "c.txt"
+  go_to "c.txt"
+  press "<Leader>x"
+  ok("<Leader>x closes the buffer of the file under the cursor in Files", vim.fn.buflisted(c) == 0)
+  local unopened = with_notifications(function() press "<Leader>x" end)
+  ok("and says so when the file is in no buffer", unopened[1] == "c.txt is not open in a buffer", vim.inspect(unopened))
+  ok("the tree is still the window", source() == "filesystem")
+
+  c = open_in_background "c.txt"
+  show("buffers", "c.txt")
+  check_keys "Buffers"
+  ok("bd is not a tree key", own "bd" == nil, vim.inspect(own "bd"))
+  ok("d is not a tree key in Buffers", own "d" == nil, vim.inspect(own "d"))
+  go_to "c.txt"
+  press "<Leader>x"
+  ok("<Leader>x closes the buffer under the cursor in Buffers", vim.fn.buflisted(c) == 0)
+  wait_for("the buffer to leave the tree", function() return not line_of "c.txt" end)
+  ok("<Tab> selects in Buffers", (own("<Tab>", "x") or {}).desc == "Select the highlighted files")
+
+  show("git_status", "b.txt")
+  check_keys "Git"
+  for _, lhs in ipairs { "A", "ga", "gu", "gt", "gr", "gc", "gg", "gp", "gl", "gU" } do
+    ok(lhs .. " is not a tree key in Git", own(lhs) == nil, vim.inspect(own(lhs)))
+  end
+  go_to "b.txt"
+  press "<Leader>ga"
+  ok("<Leader>ga stages the file", status() == "M  b.txt\n", status())
+  wait_for("the staged file", function() return line_of "b.txt" end)
+  go_to "b.txt"
+  press "<Leader>gu"
+  ok("<Leader>gu unstages it", status() == " M b.txt\n", status())
+  wait_for("the unstaged file", function() return line_of "b.txt" end)
+  go_to "b.txt"
+  local tree = vim.api.nvim_get_current_win()
+  with_notifications(function(notes)
+    press "<Leader>gc"
+    wait_for("the commit message", function() return vim.bo.filetype == "gitcommit" end)
+    ok("<Leader>gc stages the file first", status() == "M  b.txt\n", status())
+    vim.cmd "q!"
+    wait_for("the commit to be aborted", function() return #notes == 1 end)
+  end)
+  ok("the tree is the window again", vim.api.nvim_get_current_win() == tree and source() == "git_status")
 
   ok("AstroNvim's tree event handlers are kept", #require("neo-tree").config.event_handlers > 1)
 
@@ -186,9 +235,9 @@ local run, err = xpcall(function()
   require("lazy").load { plugins = { "which-key.nvim" } }
   vim.api.nvim_exec_autocmds("VimEnter", { modeline = false })
   for _, case in ipairs {
-    { "filesystem", "a.txt", "f t" },
-    { "buffers", "a.txt", "t x" },
-    { "git_status", "b.txt", "g t" },
+    { "filesystem", "a.txt", "f g t x" },
+    { "buffers", "a.txt", "f g t x" },
+    { "git_status", "b.txt", "f g t x" },
   } do
     local name, row, groups = case[1], case[2], case[3]
     show(name, row)
@@ -203,6 +252,8 @@ local run, err = xpcall(function()
   ok("nothing reported an error", vim.v.errmsg == "", vim.v.errmsg)
 end, debug.traceback)
 
+-- not from inside it: what still runs before Neovim exits (a watcher on the repository) may ask for the directory
+vim.cmd.cd(started_in)
 vim.fn.delete(dir, "rf")
 if not run then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
 if #failures > 0 then
