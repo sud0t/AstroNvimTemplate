@@ -133,7 +133,11 @@ local run, err = xpcall(function()
   buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "never saved" })
   vim.cmd "q!"
-  ok("quitting without saving aborts", result().message == "Commit aborted: empty message", vim.inspect(notes))
+  ok(
+    "quitting without saving aborts",
+    result().message == "Commit aborted: the message was not saved",
+    vim.inspect(notes)
+  )
   ok("no commit was made", git("log", "-1", "--format=%s") == "second")
 
   open()
@@ -168,6 +172,30 @@ local run, err = xpcall(function()
   )
   ok("the caller is told after the commit and after the push", done == 2, done)
 
+  local head = git("rev-parse", "HEAD")
+  open { amend = true }
+  ok(
+    "an amend starts from the message of the last commit",
+    vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == "fourth",
+    vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]
+  )
+  vim.cmd "q"
+  ok(
+    "leaving an amend without saving changes nothing",
+    result().message == "Commit aborted: the message was not saved" and git("rev-parse", "HEAD") == head,
+    vim.inspect(notes)
+  )
+  open { amend = true }
+  vim.api.nvim_buf_set_lines(0, 0, 1, false, { "fourth, reworded" })
+  vim.cmd "wq"
+  ok(
+    "a saved amend replaces the last commit",
+    result().level == vim.log.levels.INFO
+      and git("log", "-1", "--format=%s") == "fourth, reworded"
+      and git("rev-parse", "HEAD~1") == git("rev-parse", head .. "~1"),
+    vim.inspect(notes)
+  )
+
   -- not through git(): the first column of a line can be a space
   local function status()
     return vim.system({ "git", "status", "--porcelain" }, { cwd = dir, text = true }):wait().stdout
@@ -199,6 +227,64 @@ local run, err = xpcall(function()
   )
   git("checkout", "-q", "--", "e.txt")
   vim.fn.delete(dir .. "/f.txt")
+
+  -- the message window takes the focus of the window behind it (lua/user/float_focus.lua)
+  local columns, lines = vim.o.columns, vim.o.lines
+  vim.o.columns, vim.o.lines = 160, 45
+  vim.cmd "topleft 30vnew"
+  -- passes for the file tree, where a commit is started
+  vim.bo.buftype, vim.bo.bufhidden, vim.bo.filetype = "nofile", "wipe", "neo-tree"
+  local side = vim.api.nvim_get_current_win()
+  --- Where the focus is once a move to `to` has ended
+  local function rest_in(to)
+    vim.api.nvim_set_current_win(to)
+    vim.wait(50)
+    return vim.api.nvim_get_current_win()
+  end
+  local function rested_in(to)
+    vim.wait(50)
+    return vim.api.nvim_get_current_win() == to
+  end
+  stage "g.txt"
+  open()
+  win = vim.api.nvim_get_current_win()
+  ok("the window behind the message gives it the focus", rest_in(origin) == win)
+  ok("the file tree keeps it", rest_in(side) == side)
+  rest_in(origin)
+  vim.cmd.wincmd "p"
+  ok("the previous window of the message is one outside, not the one behind it", rested_in(side))
+  rest_in(win)
+  -- smart-splits moves from a float by way of its previous window, and from there around the edge of the screen
+  press "<C-h>"
+  ok("a move from the message that goes on behind it ends outside", rested_in(side))
+  local other = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, {
+    relative = "editor",
+    row = 1,
+    col = 1,
+    width = 10,
+    height = 1,
+  })
+  ok("another float takes the focus", rested_in(other))
+  vim.api.nvim_win_close(other, true)
+  rest_in(win)
+  vim.cmd.tabnew()
+  local elsewhere = vim.api.nvim_get_current_win()
+  ok("and so does a window of another tab page", rested_in(elsewhere))
+  vim.cmd.tabclose()
+  vim.o.columns = 100
+  ok(
+    "on a narrow screen the message covers the file tree",
+    vim.api.nvim_win_get_position(win)[2] < vim.api.nvim_win_get_width(side),
+    vim.api.nvim_win_get_position(win)[2]
+  )
+  ok("which still takes the focus", rest_in(side) == side)
+  ok("as the window behind still does not", rest_in(origin) == win)
+  press "isixth<Esc>ZZ"
+  result()
+  ok("leaving the message goes back to the window outside", vim.api.nvim_get_current_win() == side)
+  ok("and the window behind takes the focus again", rest_in(origin) == origin)
+  vim.api.nvim_win_close(side, true)
+  vim.o.columns, vim.o.lines = columns, lines
 
   vim.fn.mkdir(dir .. "/.git/info", "p")
   vim.fn.writefile({ "scratch.txt" }, dir .. "/.git/info/exclude")

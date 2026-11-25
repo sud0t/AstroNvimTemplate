@@ -30,6 +30,28 @@ local function with_notifications(fn)
   return notes
 end
 
+--- Runs `fn` with `answer` given to every question asked through vim.ui.select, and returns the questions.
+local function answering(answer, fn)
+  local asked, select = {}, vim.ui.select
+  ---@diagnostic disable-next-line: duplicate-set-field
+  vim.ui.select = function(items, opts, on_choice)
+    asked[#asked + 1] = { prompt = opts.prompt, items = items }
+    on_choice(answer)
+  end
+  local done, err = pcall(fn)
+  vim.ui.select = select
+  if not done then error(err, 0) end
+  return asked
+end
+
+--- The windows that show a buffer of the filetype
+local function windows_of(filetype)
+  return vim.tbl_filter(
+    function(win) return vim.bo[vim.api.nvim_win_get_buf(win)].filetype == filetype end,
+    vim.api.nvim_tabpage_list_wins(0)
+  )
+end
+
 local function tree_state() return require("neo-tree.sources.manager").get_state_for_window() end
 local function source() return vim.bo.filetype == "neo-tree" and vim.b.neo_tree_source or nil end
 local function selected() return vim.tbl_count(tree_state().selected) end
@@ -114,12 +136,22 @@ local run, err = xpcall(function()
     ["<Leader>gA"] = "Stage all",
     ["<Leader>gu"] = "Unstage file",
     ["<Leader>gt"] = "Stage or unstage file",
+    ["<Leader>gx"] = "Unstage all",
     ["<Leader>gr"] = "Revert file",
+    ["<Leader>gi"] = "Ignore file",
     ["<Leader>gc"] = "Commit",
+    ["<Leader>gC"] = "Amend last commit",
     ["<Leader>gg"] = "Commit and push",
+    ["<Leader>gU"] = "Undo last commit",
     ["<Leader>gp"] = "Push",
     ["<Leader>gl"] = "Pull",
-    ["<Leader>gU"] = "Undo last commit",
+    ["<Leader>gf"] = "Fetch",
+    ["<Leader>gb"] = "Switch branch",
+    ["<Leader>gB"] = "New branch",
+    ["<Leader>gd"] = "Delete a branch",
+    ["<Leader>gs"] = "Stash changes",
+    ["<Leader>gT"] = "Apply a stash",
+    ["<Leader>gD"] = "Drop a stash",
   }
   --- The tree's <Leader> keys are the same in every source, and every key of a source names a command it has.
   local function check_keys(name)
@@ -179,6 +211,24 @@ local run, err = xpcall(function()
   ok("<Leader>gu unstages it in Files", status() == " M b.txt\n", status())
   wait_for("the unstaged file", function() return line_of "c.txt" end)
 
+  go_to "b.txt"
+  press "i"
+  local details = vim.api.nvim_get_current_win()
+  local shown = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+  ok("i shows the file's details", shown:find("Name: b.txt", 1, true) and shown:find "Size: ", shown)
+  ok(
+    "in a float in the middle of the screen",
+    vim.api.nvim_win_get_config(details).relative == "editor" and #windows_of "neo-tree-popup" == 0,
+    vim.inspect(vim.api.nvim_win_get_config(details))
+  )
+  press "<CR>"
+  ok("that Enter closes, back to the tree", not vim.api.nvim_win_is_valid(details) and source() == "filesystem")
+  ok(
+    "neo-tree's popup is its own again",
+    require("neo-tree.ui.popups").alert ~= nil
+      and debug.getinfo(require("neo-tree.ui.popups").alert, "S").source:find "neo%-tree"
+  )
+
   local function open_in_background(name)
     local buf = vim.fn.bufadd(dir .. "/" .. name)
     vim.fn.bufload(buf)
@@ -227,6 +277,72 @@ local run, err = xpcall(function()
     wait_for("the commit to be aborted", function() return #notes == 1 end)
   end)
   ok("the tree is the window again", vim.api.nvim_get_current_win() == tree and source() == "git_status")
+  press "<Leader>gx"
+  wait_for("the index to be emptied", function() return status() == " M b.txt\n" end)
+  ok("<Leader>gx unstages all", true)
+
+  local function head() return git(dir, "log", "-1", "--format=%s") end
+  git(dir, "commit", "-q", "-am", "second")
+  local asked = answering("No", function() press "<Leader>gU" end)
+  ok(
+    "<Leader>gU asks first, and No is the first answer",
+    #asked == 1 and asked[1].prompt:find "Undo the last commit" and vim.deep_equal(asked[1].items, { "No", "Yes" }),
+    vim.inspect(asked)
+  )
+  ok("No leaves the commit", head() == "second\n" and #windows_of "neo-tree-popup" == 0, head())
+  with_notifications(function(notes)
+    answering("Yes", function() press "<Leader>gU" end)
+    wait_for("the commit to be undone", function() return #notes == 1 end)
+  end)
+  ok("Yes undoes it and keeps its changes staged", head() == "files\n" and status() == "M  b.txt\n", status())
+  for lhs, question in pairs {
+    ["<Leader>gp"] = "push",
+    ["<Leader>gl"] = "pull",
+    ["<Leader>gr"] = "revert b.txt",
+  } do
+    asked = answering(nil, function() press(lhs) end)
+    ok(
+      lhs .. " asks first in the same way",
+      #asked == 1 and asked[1].prompt:find(question, 1, true) and #windows_of "neo-tree-popup" == 0,
+      vim.inspect(asked)
+    )
+  end
+  ok("and an unanswered question changes nothing", status() == "M  b.txt\n", status())
+
+  local function branches() return git(dir, "branch", "--format=%(refname:short)") end
+  local started_on = vim.trim(git(dir, "branch", "--show-current"))
+  local input = vim.ui.input
+  ---@diagnostic disable-next-line: duplicate-set-field
+  vim.ui.input = function(_, on_confirm) on_confirm "topic" end
+  with_notifications(function(notes)
+    press "<Leader>gB"
+    wait_for("the new branch", function() return #notes == 1 end)
+  end)
+  vim.ui.input = input
+  ok("<Leader>gB makes a branch and checks it out", git(dir, "branch", "--show-current") == "topic\n", branches())
+  git(dir, "checkout", "-q", started_on)
+  with_notifications(function(notes)
+    asked = answering("Yes", function()
+      press "<Leader>gd"
+      -- the branch that is checked out is not listed, which leaves the new one
+      wait_for("the picker of branches", function()
+        local open = require("snacks").picker.get({ source = "git_branches" })[1]
+        return open and open:count() == 1 and vim.bo.filetype == "snacks_picker_input"
+      end)
+      press "<CR>"
+      wait_for("the branch to be deleted", function() return #notes == 1 end)
+    end)
+  end)
+  ok(
+    "<Leader>gd asks before it deletes the branch that is picked",
+    asked[1].prompt == "Delete branch topic?",
+    vim.inspect(asked)
+  )
+  ok("and deletes it", branches() == started_on .. "\n", branches())
+  ok(
+    "the tree is the window again after the pickers",
+    vim.api.nvim_get_current_win() == tree and source() == "git_status"
+  )
 
   ok("AstroNvim's tree event handlers are kept", #require("neo-tree").config.event_handlers > 1)
 
@@ -247,7 +363,7 @@ local run, err = xpcall(function()
     ok("which-key opens on <Leader> in " .. name, own("<Space>").desc:find("which-key-trigger", 1, true))
     ok("which-key lists only the tree's groups in " .. name, popup "<Space>" == groups, popup "<Space>")
   end
-  ok("which-key lists the Git keys", popup "<Space>g" == "A U a c g l p r t u", popup "<Space>g")
+  ok("which-key lists the Git keys", popup "<Space>g" == "A B C D T U a b c d f g i l p r s t u x", popup "<Space>g")
 
   ok("nothing reported an error", vim.v.errmsg == "", vim.v.errmsg)
 end, debug.traceback)

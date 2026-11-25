@@ -58,6 +58,10 @@ return {
         gco = false, -- AstroNvim's add comment below and above
         gcO = false,
         ["<Leader>k"] = { function() require("user.cheatsheet").open() end, desc = "Keys cheat sheet (non-leader)" },
+        -- AstroNvim's pickers that switch branch and apply a stash: what changes the repository is done from the
+        -- file tree, where these two keys open them (plugins/neo-tree.lua)
+        ["<Leader>gb"] = false,
+        ["<Leader>gT"] = false,
         ["<Leader>C"] = false, -- AstroNvim's force close buffer: <Leader>X does that
         ["<Leader>c"] = { false, desc = "Folds close/open" }, -- `false` drops AstroNvim's close buffer, keeping only the group
         ["<Leader>cc"] = { "<Cmd>foldclose<CR>", desc = "Close fold" },

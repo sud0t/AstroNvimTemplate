@@ -1,18 +1,21 @@
 -- Commit with the message written in a floating window on git's own COMMIT_EDITMSG, as if this Neovim were the
--- editor that `git commit` started (<Leader>gc and <Leader>gg in the file tree's Git source, plugins/neo-tree.lua).
---   Git decides, as it does for any editor: leaving the window with a saved message commits; leaving it without
---   ever saving, or with an empty message saved, aborts.
+-- editor that `git commit` started (<Leader>gc, <Leader>gg and <Leader>gC in the file tree, plugins/neo-tree.lua).
+--   Leaving the window with the message saved commits. Leaving it without having saved aborts, and so does saving
+--   an empty message. That is one rule more than git's own, for an amend: the last commit's message is in the file
+--   already, and git would commit with it again when the window is only closed.
 --   In the tree the keys commit the file under the cursor as well when it has changes of which none is staged:
 --   it is staged first, and stays staged when the commit is aborted.
 -- A running Neovim cannot be told from outside to open a file and wait (it has no --remote-wait). So `git commit`
 -- runs as a job whose editor is a shell line: it prints the path git wants edited to the job's output, then
--- waits for a line on its input, which arrives when the window closes. When that input is lost instead (Neovim
--- exits), the line fails and git aborts the commit.
+-- waits for a line on its input, which arrives when the window closes and says whether the message was saved.
+-- Any other line, and the loss of that input (Neovim exits), makes the editor fail, and git aborts the commit.
+local git = require "user.git"
+
 local M = {}
 
 -- starts the line with the path, so that it is never taken for the output of a hook
 local MARKER = "\30"
-local EDITOR = [[sh -c 'printf "\036%s\n" "$1" && read -r _' sh]]
+local EDITOR = [[sh -c 'printf "\036%s\n" "$1" && read -r reply && test "$reply" = saved' sh]]
 
 -- A float starts with the options of the window it is opened from, the file tree's here. These are set back to
 -- their global values, so that the message is edited in a window like any other.
@@ -33,6 +36,7 @@ local normal_window_options = {
 
 ---@class user.git_commit.Active
 ---@field window? snacks.win the message window, once git has asked for the editor
+---@field unsaved? boolean the window was left without the message having been saved
 
 ---@type user.git_commit.Active? the commit that is running: one at a time, as they share COMMIT_EDITMSG
 local active
@@ -50,10 +54,10 @@ local function title(buf)
   return { { " Commit " .. mark, "FloatTitle" } }
 end
 
---- Opens `path` in the message window. `on_close` runs when the window is left.
+--- Opens `path` in the message window.
 ---@param path string
 ---@param dir string a directory in the repository
----@param on_close fun()
+---@param on_close fun(saved: boolean) called when the window is left, with whether the message was saved in it
 ---@return snacks.win
 local function edit(path, dir, on_close)
   local buf = vim.fn.bufadd(path)
@@ -66,6 +70,7 @@ local function edit(path, dir, on_close)
   for _, name in ipairs(normal_window_options) do
     wo[name] = vim.go[name]
   end
+  local saved = false
   local window = require("snacks").win {
     buf = buf,
     title = title(buf),
@@ -81,9 +86,11 @@ local function edit(path, dir, on_close)
       -- git starts its editor inside the repository: <Leader>Ac (user/ai/commit.lua) looks for the commit there
       vim.api.nvim_win_call(self.win, function() vim.cmd.lcd(vim.fn.fnameescape(dir)) end)
     end,
-    on_close = on_close,
+    on_close = function() on_close(saved) end,
   }
-  -- on the buffer, so it goes when the buffer is wiped
+  require("user.float_focus").take_priority(window.win)
+  -- both on the buffer, so they go when the buffer is wiped
+  vim.api.nvim_create_autocmd("BufWritePost", { buffer = buf, callback = function() saved = true end })
   vim.api.nvim_create_autocmd("BufModifiedSet", {
     buffer = buf,
     callback = function() window:set_title(title(buf)) end,
@@ -91,30 +98,13 @@ local function edit(path, dir, on_close)
   return window
 end
 
----@param dir string
----@param on_done? fun()
-local function push(dir, on_done)
-  vim.system(
-    { "git", "push" },
-    { cwd = dir, text = true },
-    vim.schedule_wrap(function(result)
-      local output = vim.trim((result.stderr or "") .. (result.stdout or ""))
-      notify(output, result.code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR, "git push")
-      if on_done then on_done() end
-    end)
-  )
-end
-
--- paths are the names of files, not patterns
-local GIT = { "git", "--literal-pathspecs" }
-
 --- Whether the file `path` has changes of which none is staged: an untracked file, or one changed in the work tree
 --- only. False for an unchanged or ignored file, and when git cannot tell, which `git commit` then reports.
 ---@param dir string
 ---@param path string
 ---@return boolean
 local function only_unstaged_changes(dir, path)
-  local cmd = vim.list_extend(vim.deepcopy(GIT), { "status", "--porcelain", "--untracked-files=all", "--", path })
+  local cmd = { "git", git.LITERAL_PATHS, "status", "--porcelain", "--untracked-files=all", "--", path }
   local status = vim.system(cmd, { cwd = dir, text = true }):wait()
   -- a line is "XY path", where X is the file's state in the index: a space when it is as in the last commit
   return status.code == 0 and status.stdout:find "^[ ?]" ~= nil
@@ -123,6 +113,7 @@ end
 ---@class user.git_commit.Opts
 ---@field dir string a directory in the repository to commit in
 ---@field stage? string a file to stage first, when it has changes of which none is staged
+---@field amend? boolean replace the last commit, starting from its message
 ---@field push? boolean push after the commit
 ---@field on_change? fun() called after each change made to the repository: the file staged, the commit, the push
 
@@ -140,7 +131,7 @@ function M.commit(opts)
     return
   end
   if opts.stage and only_unstaged_changes(opts.dir, opts.stage) then
-    local cmd = vim.list_extend(vim.deepcopy(GIT), { "add", "--", opts.stage })
+    local cmd = { "git", git.LITERAL_PATHS, "add", "--", opts.stage }
     local added = vim.system(cmd, { cwd = opts.dir, text = true }):wait()
     if added.code ~= 0 then
       notify(vim.trim(added.stderr), vim.log.levels.ERROR, "git add")
@@ -154,7 +145,7 @@ function M.commit(opts)
   local output = ""
   local job
   job = vim.system(
-    { "git", "commit" },
+    opts.amend and { "git", "commit", "--amend" } or { "git", "commit" },
     {
       cwd = opts.dir,
       env = { GIT_EDITOR = EDITOR },
@@ -167,20 +158,25 @@ function M.commit(opts)
         if not path then return end
         output = output:gsub(MARKER .. "[^\n]*\n", "")
         vim.schedule(function()
-          current.window = edit(path, opts.dir, function()
+          current.window = edit(path, opts.dir, function(saved)
             current.window = nil
-            if not job:is_closing() then job:write "\n" end
+            current.unsaved = not saved
+            if not job:is_closing() then job:write(saved and "saved\n" or "unsaved\n") end
           end)
         end)
       end,
     },
     vim.schedule_wrap(function(result)
       active = nil
+      -- before the window is closed here, which counts as leaving it unsaved
+      local left_unsaved = current.unsaved
       if current.window then current.window:close() end
 
       local errors = vim.trim(result.stderr or "")
       if result.code ~= 0 then
-        if errors:find "^Aborting commit due to empty commit message" then
+        if left_unsaved then
+          notify("Commit aborted: the message was not saved", vim.log.levels.WARN)
+        elseif errors:find "^Aborting commit due to empty commit message" then
           notify("Commit aborted: empty message", vim.log.levels.WARN)
         else
           -- nothing staged: git says so on its output, with nothing on its error output
@@ -190,7 +186,7 @@ function M.commit(opts)
       end
       notify(vim.trim(output), vim.log.levels.INFO)
       if opts.on_change then opts.on_change() end
-      if opts.push then push(opts.dir, opts.on_change) end
+      if opts.push then git.push { dir = opts.dir, on_change = opts.on_change } end
     end)
   )
 end
