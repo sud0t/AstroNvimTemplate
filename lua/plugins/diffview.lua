@@ -1,8 +1,5 @@
--- diffview.nvim (imported from AstroCommunity in community.lua): side-by-side git diffs and file history.
+-- diffview.nvim: side-by-side git diffs and file history.
 -- Loaded on demand by its commands and the mappings below (the community module loads it in every git file).
---   <Leader>gv  toggle diff of the working tree (close with <Leader>gv, or q in its file panels)
---   <Leader>gh  history of the current file (visual: history of the selected lines)
---   <Leader>gH  history of the repository
 -- Enter on a commit in the commit pickers (<Leader>gc, <Leader>gC) opens it here as well (plugins/snacks.lua).
 
 local function toggle()

@@ -1,14 +1,12 @@
 -- The git keys of a file buffer inside the whole configuration: they only look (lua/plugins/gitsigns.lua, and the
 -- git parts of astrocore.lua, snacks.lua and diffview.lua there).
---   nvim --headless -c 'luafile ~/.config/nvim/tests/git_keys.lua' -c 'qa!' < /dev/null
+--   tests/run.sh git_keys
 -- prints "ok: N checks", or what failed and exits with 1. Run it after changing those files and after an update of
 -- AstroNvim, gitsigns, snacks or diffview: the keys and actions that are taken out are theirs.
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+harness.whole_config()
+local ok = harness.ok
 
 local function wait_for(what, cond) assert(vim.wait(5000, cond, 20), "timed out waiting for " .. what) end
 
@@ -148,12 +146,4 @@ end, debug.traceback)
 -- not from inside it: what still runs before Neovim exits (gitsigns watches the repository) may ask for the directory
 vim.cmd.cd(started_in)
 vim.fn.delete(dir, "rf")
-if not run then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
-if #failures > 0 then
-  io.stderr:write(("%d of %d checks failed:\n"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    io.stderr:write("  - " .. failure .. "\n")
-  end
-  vim.cmd "cq"
-end
-print(("ok: %d checks"):format(count))
+harness.finish(run, err)

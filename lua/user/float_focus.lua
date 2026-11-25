@@ -1,9 +1,7 @@
--- A float that takes the focus of the windows it covers, for as long as it is open: the cursor of a window behind
--- a float is drawn on the float, as if what is typed went there. The message window of a commit is such a float
--- (user/git_commit.lua). A floating terminal needs none of this: toggleterm closes it when the focus leaves it.
---   A move into a covered window ends in the float. A move out of the float ends in the window that was used
---   last outside of it, never in one behind it. Windows the float does not touch, the file tree, and other floats
---   (pickers, notifications) take the focus as always.
+-- A float that takes the focus of the windows it covers while it is open: the cursor of a window behind a float
+-- is drawn on the float, as if what is typed went there. The message window of a commit is such a float
+-- (user/git_commit.lua). A move into a covered window ends in the float; a move out of the float ends in the
+-- window used last outside of it, never in one behind it. The file tree and other floats take the focus as always.
 local M = {}
 
 --- The screen cells of a window, its border included: top, left, bottom and right, the last two exclusive.
@@ -22,8 +20,7 @@ end
 ---@param win integer
 local function is_float(win) return vim.api.nvim_win_get_config(win).relative ~= "" end
 
---- The file tree is never behind a float. What a float is open for is done with the tree's keys as well (staging
---- for a commit), and a wide float covers a part of it.
+--- The file tree is never behind a float: a commit is staged with the tree's keys, and a wide float covers part of it.
 ---@param win integer
 local function is_file_tree(win) return vim.bo[vim.api.nvim_win_get_buf(win)].filetype == "neo-tree" end
 

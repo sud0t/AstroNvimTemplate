@@ -17,14 +17,10 @@ end
 
 ------------------------------------------------------------------------------------------------- the rows
 
--- A terminal has no long lines. An address or a path that is longer than a row has room for is broken where
--- the row ends and goes on in the next one, under that row's indentation. What is told apart from a row
--- that merely ends with an address, and a next row that starts with another word:
---   - a row something is broken in reaches as far to the right as any row of its paragraph (the rows
---     around it up to the next empty one; rows keep the width they were printed at, so how wide the window
---     is now says nothing about them)
---   - the pieces together are longer than that row has room for: what fits is not broken, it is moved
---   - a piece that starts an address of its own (`https://`) goes on from nothing
+-- A terminal breaks an address or a path that is longer than a row and continues it under the row's
+-- indentation. A row counts as broken only when it reaches as far right as any row of its paragraph (the rows
+-- up to the next empty one: they keep the width they were printed at, whatever the window's is now) and the
+-- pieces together would not have fitted on it; a piece that starts with `scheme://` continues nothing.
 local slack = 2 -- columns a broken row may stay short of the one that reaches furthest
 local max_rows = 4 -- rows one address is put together from
 

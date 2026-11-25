@@ -1,19 +1,18 @@
 -- <Leader>AR: review the buffer (or the visual selection) and apply the fixes in place, with the AI chosen with
--- <Leader>As: the local model (by default qwen3:4b-instruct, which fits entirely in the T1000's VRAM), Claude or
--- another provider's model.
--- The model answers with whole fixed functions; each one
--- replaces its function in the buffer and is shown as an inline diff (CodeCompanion's diff UI), one fix at a
--- time, with the reason in the banner:
+-- <Leader>As. The model answers with whole fixed functions; each one replaces its function in the buffer and is
+-- shown as an inline diff (CodeCompanion's diff UI), one fix at a time, with the reason in the banner:
 --   g2  accept this fix      g3  reject it (restores the code)      g1  accept this and all remaining fixes
 -- While the model answers, what it writes is shown live in a small window in the bottom right corner.
 -- <Leader>AR while the model is still answering cancels the review.
 local M = {}
 
--- What fits the model's 6144 token context next to the system prompt (~450 tokens) and the answer: ~4600 tokens
--- of code, at the ~3 characters per token of dense code. Past the context Ollama silently drops the start.
--- The providers' models (`_claude`: Claude and every other provider) take whole files.
-local max_chars, max_chars_claude = 13000, 400000
-local num_predict, num_predict_claude = 1024, 16000
+local stream = require "user.ai.stream"
+
+-- What fits the local model's 6144 token context next to the system prompt (~450 tokens) and the answer: ~4600
+-- tokens of code, at the ~3 characters per token of dense code. Past the context Ollama silently drops the
+-- start. The providers' models take whole files.
+local max_chars, max_chars_remote = 13000, 400000
+local num_predict, num_predict_remote = 1024, 16000
 
 local system_prompt = [[
 You review code for an experienced programmer. Output only concrete fixes to the given code.
@@ -97,7 +96,7 @@ end
 --- whole file), so the code blocks are split into functions and matched to the reasons by function name.
 local function parse(text, lang)
   -- (the leading newline lets the patterns below find a code fence on the very first line)
-  text = "\n" .. text:gsub("<think>.-</think>", "")
+  text = "\n" .. text
   local header = "%*%*`?([^`*\n]+)`?%*%*:?[ \t]*([^\n]*)"
   local reasons, items = {}, {} -- reasons by function name; headers and code blocks in answer order
   local pos = 1
@@ -364,21 +363,27 @@ local function start(bufnr, fixes, range)
       )
   end, fixes)
   if #fixes == 0 then return notify "No changes needed." end
-  session = { bufnr = bufnr, fixes = fixes, range = range, index = 0, accepted = 0, skipped = {} }
+  local waiting = { bufnr = bufnr, fixes = fixes, range = range, index = 0, accepted = 0, skipped = {} }
+  session = waiting
   -- the diff is shown in the buffer's window; wait until the buffer is visible again
   if vim.fn.bufwinid(bufnr) == -1 then
     notify(("%d fixes ready, shown when you return to %s"):format(#fixes, vim.fn.bufname(bufnr)))
-    vim.api.nvim_create_autocmd("BufWinEnter", { buffer = bufnr, once = true, callback = vim.schedule_wrap(show_next) })
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+      buffer = bufnr,
+      once = true,
+      callback = vim.schedule_wrap(function()
+        if session == waiting then show_next() end -- (not when the buffer was closed and another review began)
+      end),
+    })
     return
   end
-  require "codecompanion" -- load the plugin (and its config) before using its diff UI
   show_next()
 end
 
 --- apply the model's answer to rows [range[1], range[2]] (0-based) of the buffer
-function M.apply(bufnr, answer, range)
-  if bufnr == 0 then bufnr = vim.api.nvim_get_current_buf() end
-  if not vim.api.nvim_buf_is_valid(bufnr) then return end
+local function apply(bufnr, answer, range)
+  -- (closed while the model answered: closing unloads the buffer, which is still valid, and its lines are gone)
+  if not vim.api.nvim_buf_is_loaded(bufnr) then return end
   local ft = vim.bo[bufnr].filetype
   local fixes = parse(answer, vim.treesitter.language.get_lang(ft) or ft)
   if #fixes == 0 then return notify "No changes needed." end
@@ -393,24 +398,21 @@ function M.run()
     job = nil
     return notify "Review cancelled"
   end
+  -- fixes that wait in a buffer that was closed since are dropped (closing unloads it: it is still valid)
+  if session and not vim.api.nvim_buf_is_loaded(session.bufnr) then session = nil end
   if session then return notify("Finish the fixes on screen first (accept or reject)", vim.log.levels.WARN) end
 
   local bufnr = vim.api.nvim_get_current_buf()
   if not vim.bo[bufnr].modifiable then return notify("Buffer is not modifiable", vim.log.levels.WARN) end
-  local first, last = 0, vim.api.nvim_buf_line_count(bufnr) - 1
-  local visual = vim.fn.mode():match "^[vV\22]"
-  if visual then
-    first, last = vim.fn.line "v" - 1, vim.fn.line "." - 1
-    if first > last then
-      first, last = last, first
-    end
-    vim.cmd.normal { "\27", bang = true }
+  local first, last = stream.selection()
+  local visual = first ~= nil
+  if not visual then
+    first, last = 0, vim.api.nvim_buf_line_count(bufnr) - 1
   end
   local code = table.concat(vim.api.nvim_buf_get_lines(bufnr, first, last + 1, false), "\n")
   local ai = require "user.ai"
   local is_local = ai.is_local()
-  local model = ai.local_model()
-  local limit = is_local and max_chars or max_chars_claude
+  local limit = is_local and max_chars or max_chars_remote
   if #code > limit then
     return notify(
       ("Too large for %s (%d chars, max ~%d). Select a region and try again."):format(ai.label(), #code, limit),
@@ -423,19 +425,18 @@ function M.run()
   local request = {
     system = system_prompt,
     messages = { { role = "user", content = ("Review %s:\n\n````%s\n%s\n````"):format(scope, ft, code) } },
-    max_tokens = is_local and num_predict or num_predict_claude, -- (local: 5 fixed functions fit easily)
+    max_tokens = is_local and num_predict or num_predict_remote, -- (local: 5 fixed functions fit easily)
     ollama = {
       keep_alive = "0s", -- unload as soon as it answers, handing the GPU back to completion
       options = {
         num_ctx = 6144, -- KV cache is ~75KB/token here; 8k leaves too little VRAM headroom
         temperature = 0.1, -- stick to the format and the code
-        num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places part of them); see `send`
+        num_gpu = 99, -- all layers on the GPU (Ollama's own estimate only places part of them); see `on_answer`
       },
     },
   }
 
   local starting = { cancel = function() end } -- stands in for the request until the GPU has been cleared
-  local stream = require "user.ai.stream"
   local send
 
   local function on_answer(this, answer, info, float)
@@ -450,16 +451,14 @@ function M.run()
       return send()
     end
     job = nil
-    if is_local then require("user.ai.ollama").unload_spilled(model) end
     if err then return notify("Request failed: " .. err, vim.log.levels.ERROR) end
     if info.done_reason == "length" then
       notify("The answer hit the length limit; the last fix may be missing", vim.log.levels.WARN)
     end
-    M.apply(bufnr, answer, { first, last })
+    apply(bufnr, answer, { first, last })
   end
 
   send = function()
-    -- the answer is shown in a corner window while it is written; the fixes in it are applied when it is complete
     local float = stream.float "AI review"
     local this = {}
     this.handle = ai.chat(request, function(text)
@@ -477,7 +476,8 @@ function M.run()
   if not is_local then return send() end
   -- the review model only fits on the GPU on its own; completion reloads afterwards (~1s, once)
   job = starting
-  require("user.ai.ollama").make_room_for(model, function()
+  local ollama = require "user.ai.ollama"
+  ollama.make_room_for(ollama.model, function()
     if job == starting then send() end -- not cancelled meanwhile
   end)
 end

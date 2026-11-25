@@ -1,16 +1,14 @@
 -- The debug UI of lua/plugins/dap.lua inside the whole configuration: the debug keys, nvim-dap-view's window and
 -- its tabs, and when that window opens and closes.
---   nvim --headless -c 'luafile ~/.config/nvim/tests/dap_view.lua' -c 'qa!' < /dev/null
--- prints "ok: N checks", or what failed and exits with 1. Run it after changing lua/plugins/dap.lua and after
--- updating nvim-dap-view or nvim-dap. The sessions are played by a stand-in debug adapter inside this Neovim, so
--- no debugger has to be installed; what the real adapters show in the tabs is not checked here.
+--   tests/run.sh dap_view
+-- Run it after changing lua/plugins/dap.lua and after updating nvim-dap-view or nvim-dap. A stand-in debug
+-- adapter inside this Neovim plays the sessions, so no debugger has to be installed; what the real adapters
+-- show in the tabs is not checked here.
 local uv = vim.uv
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+harness.whole_config()
+local ok = harness.ok
 
 --- A debug adapter for one "program": a session stops on line 2 of `program` as soon as it is configured, and
 --- `continue` runs it to its end. Fields of the launch configuration choose how it behaves:
@@ -47,8 +45,9 @@ local function stand_in_adapter(program)
       launch = function(request)
         launch = request.arguments
         if not launch.terminal then return answer(request) end
-        local arguments =
-          { kind = "integrated", cwd = vim.fs.dirname(program), args = { "echo", "printed in the terminal" } }
+        -- (the sleep: nvim-dap asks for the program's pid after starting it, which fails once the program ended)
+        local command = { "sh", "-c", "echo printed in the terminal; sleep 0.1" }
+        local arguments = { kind = "integrated", cwd = vim.fs.dirname(program), args = command }
         send { type = "request", command = "runInTerminal", arguments = arguments }
         unanswered_launch = request
       end,
@@ -109,17 +108,21 @@ local run, err = xpcall(function()
   ok("nvim-dap-view is a plugin", plugins["nvim-dap-view"] ~= nil)
   ok("the debugger is not loaded at startup", package.loaded["dap"] == nil and package.loaded["dap-view"] == nil)
 
-  -- AstroNvim's debug keys, which the change of UI must leave alone, and the keys of the UI itself
+  -- AstroNvim's debug keys, which the spec of the UI must leave alone, and the keys of the UI itself
   local keys = {
     n = "<F5> <F17> <F21> <F29> <F6> <F9> <F10> <F11> <F23> <Leader>db <Leader>dB <Leader>dc <Leader>dC <Leader>di"
       .. " <Leader>do <Leader>dO <Leader>dq <Leader>dQ <Leader>dp <Leader>dr <Leader>ds"
       .. " <Leader>du <Leader>dh <Leader>dE <Leader>dw",
-    v = "<Leader>dE <Leader>dw",
+    x = "<Leader>dE <Leader>dw",
   }
   for mode, mapped in pairs(keys) do
     for key in mapped:gmatch "%S+" do
       ok(("%s is mapped in mode %s"):format(key, mode), vim.fn.maparg(key, mode, false, true).desc ~= nil)
     end
+  end
+  -- a space typed over a snippet placeholder must not wait for a debug key
+  for key in keys.x:gmatch "%S+" do
+    ok(key .. " is not mapped in select mode", vim.fn.maparg(key, "s") == "", vim.fn.maparg(key, "s"))
   end
   ok("<Leader>dR is not mapped", next(vim.fn.maparg("<Leader>dR", "n", false, true)) == nil)
 
@@ -132,6 +135,14 @@ local run, err = xpcall(function()
   require("lazy").load { plugins = { "nvim-dap" } }
   local dap, dap_view = require "dap", require "dap-view"
   ok("nvim-dap-ui is not loaded with the debugger", package.loaded["dapui"] == nil)
+  -- neotest-jest and launch.json debug Node through this adapter, which nothing else registers
+  local js_debug = vim.fn.expand "$MASON/packages/js-debug-adapter/js-debug/src/dapDebugServer.js"
+  local node = dap.adapters["pwa-node"]
+  ok(
+    "Node's debug adapter runs Mason's js-debug-adapter, when that is installed",
+    vim.fn.filereadable(js_debug) == 0 or (type(node) == "table" and node.executable.args[1] == js_debug),
+    vim.inspect(node)
+  )
   dap.adapters.stand_in = { type = "server", host = "127.0.0.1", port = stand_in_adapter(program) }
   local notes = {}
   vim.notify = function(msg) notes[#notes + 1] = msg end
@@ -343,13 +354,5 @@ local run, err = xpcall(function()
   ok("nothing reported an error", vim.v.errmsg == "", vim.v.errmsg)
 end, debug.traceback)
 
-if not run then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
 if dir then vim.fn.delete(dir, "rf") end
-if #failures > 0 then
-  io.stderr:write(("%d of %d checks failed:\n"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    io.stderr:write("  - " .. failure .. "\n")
-  end
-  vim.cmd "cq"
-end
-print(("ok: %d checks"):format(count))
+harness.finish(run, err)

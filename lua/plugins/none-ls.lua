@@ -1,7 +1,5 @@
--- none-ls (null-ls) only serves a few filetypes here: stylua/selene for Lua and biome for the web languages
--- (mason-null-ls registers sources for the Mason tools that have a none-ls builtin). AstroNvim loads it, with
--- mason-null-ls, on every opened file (`User AstroFile`, ~35ms), so load it on those filetypes instead.
--- Add the filetypes of any new Mason formatter/linter with a none-ls builtin here.
+-- AstroNvim loads none-ls on every file (~35ms). Here it serves only the filetypes below (stylua, selene,
+-- biome); a new Mason tool with a none-ls builtin needs its filetypes added.
 
 ---@type LazySpec
 return {

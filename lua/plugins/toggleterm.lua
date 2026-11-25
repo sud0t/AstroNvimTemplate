@@ -1,7 +1,5 @@
--- <Leader>tf / <Leader>th / <Leader>tv open the terminal in the directory of the current buffer instead of the
--- directory Neovim was started in (AstroNvim's default). A terminal that already exists comes back as it was and
--- is only `cd`ed to the buffer's directory when its shell is sitting idle at the prompt somewhere else, so a
--- program running in it never gets a `cd` typed into it. `<F7>` still just toggles the last terminal.
+-- <Leader>tf/th/tv open the terminal in the buffer's directory, not Neovim's. An existing terminal is `cd`ed
+-- there only while its shell is idle at the prompt: a program running in it never gets a `cd` typed into it.
 
 local function buffer_dir()
   local name = vim.api.nvim_buf_get_name(0)
@@ -30,9 +28,8 @@ local function shell_state(job_id)
   if not ok then return end
   local stat = read_file("/proc/" .. pid .. "/stat")
   if not stat then return end
-  -- fields after "(comm)": state ppid pgrp session tty_nr tpgid ...; tpgid is the process group that owns the
-  -- terminal. `termopen` runs the shell through `'shell' -c`, so the job's own pid is an outer, non-interactive
-  -- shell: look at whatever is in the foreground instead. A shell there is waiting at its prompt.
+  -- Field 6 after "(comm)" is tpgid, the process group in the terminal's foreground. The job's own pid is the
+  -- outer `'shell' -c` that `termopen` starts, so the foreground decides: a shell there waits at its prompt.
   local fields = vim.split(stat:match "^.*%)%s*(.*)$" or "", "%s+", { trimempty = true })
   local foreground = tonumber(fields[6])
   if not foreground or foreground <= 0 then return false end

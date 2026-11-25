@@ -1,13 +1,11 @@
 -- The commit message window inside the whole configuration (lua/user/git_commit.lua).
---   nvim --headless -c 'luafile ~/.config/nvim/tests/git_commit.lua' -c 'qa!' < /dev/null
+--   tests/run.sh git_commit
 -- prints "ok: N checks", or what failed and exits with 1. Run it after changing that file and after an update of
 -- git or snacks.nvim: git has to pass the output and the input of its editor through, and the window is snacks'.
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+harness.whole_config()
+local ok = harness.ok
 
 local function wait_for(what, cond) assert(vim.wait(5000, cond, 20), "timed out waiting for " .. what) end
 local function press(keys) vim.api.nvim_feedkeys(vim.keycode(keys), "mx", false) end
@@ -320,12 +318,4 @@ end, debug.traceback)
 vim.notify = notify
 vim.fn.delete(dir, "rf")
 vim.fn.delete(remote, "rf")
-if not run then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
-if #failures > 0 then
-  io.stderr:write(("%d of %d checks failed:\n"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    io.stderr:write("  - " .. failure .. "\n")
-  end
-  vim.cmd "cq"
-end
-print(("ok: %d checks"):format(count))
+harness.finish(run, err)

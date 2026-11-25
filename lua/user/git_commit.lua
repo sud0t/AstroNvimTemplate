@@ -1,14 +1,9 @@
--- Commit with the message written in a floating window on git's own COMMIT_EDITMSG, as if this Neovim were the
--- editor that `git commit` started (<Leader>gc, <Leader>gg and <Leader>gC in the file tree, plugins/neo-tree.lua).
---   Leaving the window with the message saved commits. Leaving it without having saved aborts, and so does saving
---   an empty message. That is one rule more than git's own, for an amend: the last commit's message is in the file
---   already, and git would commit with it again when the window is only closed.
---   In the tree the keys commit the file under the cursor as well when it has changes of which none is staged:
---   it is staged first, and stays staged when the commit is aborted.
--- A running Neovim cannot be told from outside to open a file and wait (it has no --remote-wait). So `git commit`
--- runs as a job whose editor is a shell line: it prints the path git wants edited to the job's output, then
--- waits for a line on its input, which arrives when the window closes and says whether the message was saved.
--- Any other line, and the loss of that input (Neovim exits), makes the editor fail, and git aborts the commit.
+-- Commit with the message written in a floating window on git's own COMMIT_EDITMSG (<Leader>gc, gg, gC in the file
+-- tree). Leaving the window with the message saved commits; leaving it unsaved, or saving an empty message, aborts
+-- (also for an amend, where git itself would commit the old message again).
+-- A running Neovim cannot be told to open a file and wait, so `git commit` runs as a job whose editor is a shell
+-- line: it prints the path to edit, then reads one line, which says whether the message was saved. Anything else,
+-- or losing that input when Neovim exits, fails the editor and git aborts.
 local git = require "user.git"
 
 local M = {}
@@ -118,8 +113,8 @@ end
 ---@field on_change? fun() called after each change made to the repository: the file staged, the commit, the push
 
 --- Commits what is staged in the repository of `opts.dir`, with the message written in a floating window.
---- `opts.stage` makes that a commit of one changed file without staging it by hand. A file that is staged in part
---- is left as it is: what is not in the index was left out of it on purpose.
+--- `opts.stage` makes that a commit of one changed file without staging it by hand; it stays staged when the commit
+--- is aborted. A file staged in part is left as it is: what is not in the index was left out of it on purpose.
 ---@param opts user.git_commit.Opts
 function M.commit(opts)
   if active then

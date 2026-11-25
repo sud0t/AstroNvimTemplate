@@ -1,13 +1,12 @@
--- The file tree's keys inside the whole configuration (lua/plugins/neo-tree.lua, lua/user/hidden_keys.lua).
---   nvim --headless -c 'luafile ~/.config/nvim/tests/tree_keys.lua' -c 'qa!' < /dev/null
--- prints "ok: N checks", or what failed and exits with 1. Run it after changing either file and after an update
--- of neo-tree, AstroNvim or which-key: the keys that are moved or removed are theirs.
+-- The file tree's keys inside the whole configuration (lua/plugins/neo-tree.lua, lua/user/git_prompts.lua,
+-- lua/user/hidden_keys.lua).
+--   tests/run.sh tree_keys
+-- prints "ok: N checks", or what failed and exits with 1. Run it after changing one of those files and after an
+-- update of neo-tree, AstroNvim, snacks or which-key: the keys that are moved or removed and the pickers are theirs.
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+harness.whole_config()
+local ok = harness.ok
 
 local function press(keys) vim.api.nvim_feedkeys(vim.keycode(keys), "mx", false) end
 local function wait_for(what, cond) assert(vim.wait(5000, cond, 20), "timed out waiting for " .. what) end
@@ -54,6 +53,13 @@ end
 
 local function tree_state() return require("neo-tree.sources.manager").get_state_for_window() end
 local function source() return vim.bo.filetype == "neo-tree" and vim.b.neo_tree_source or nil end
+--- The source the tree window shows, once neo-tree has drawn it. The window holds a source's buffer before the
+--- rows are drawn, and a draw that is still to come takes the window back from a source switched to before it.
+--- (`_ready` is the flag neo-tree keeps for its own tests to wait on.)
+local function drawn_source()
+  local state = source() and tree_state()
+  return state and state._ready and source() or nil
+end
 local function selected() return vim.tbl_count(tree_state().selected) end
 
 local function line_of(name)
@@ -79,7 +85,7 @@ local function show(wanted, row)
     if source() == wanted then break end
     local before = source()
     press "<Tab>"
-    wait_for("the source after " .. tostring(before), function() return source() and source() ~= before end)
+    wait_for("the source after " .. tostring(before), function() return drawn_source() and drawn_source() ~= before end)
   end
   assert(source() == wanted, "there is no source " .. wanted)
   wait_for(row .. " in " .. wanted, function() return line_of(row) end)
@@ -97,7 +103,25 @@ local function popup(prefix)
   return table.concat(keys, " ")
 end
 
+--- Returns a function that tells whether neo-tree still has a change of the repository to hand to its sources,
+--- which it does 100 ms after the command that made the change. For once the tree is loaded.
+local function git_events()
+  local events = require "neo-tree.events"
+  -- (under another name nothing below would ever be pending, and the wait on it would pass at once)
+  local git_event =
+    assert(events.GIT_EVENT, "neo-tree no longer names its event for a change of the repository GIT_EVENT")
+  local pending, fire = false, events.fire_event
+  ---@diagnostic disable-next-line: duplicate-set-field
+  events.fire_event = function(event, ...)
+    if event == git_event then pending = true end
+    return fire(event, ...)
+  end
+  events.subscribe { event = git_event, handler = function() pending = false end }
+  return function() return pending end
+end
+
 local dir = vim.fn.tempname()
+local remote = vim.fn.tempname()
 local started_in = vim.fn.getcwd()
 local run, err = xpcall(function()
   vim.fn.mkdir(dir)
@@ -116,6 +140,7 @@ local run, err = xpcall(function()
   -- neo-tree's setup clears netrw's autocommand group with silent!, which leaves an error message behind here,
   -- where netrw is off and the group does not exist
   vim.v.errmsg = ""
+  local git_event_pending = git_events()
 
   ok("<Tab> is next source", mapped_to("<Tab>", "next_source"), vim.inspect(own "<Tab>"))
   ok("<S-Tab> is previous source", mapped_to("<S-Tab>", "prev_source"), vim.inspect(own "<S-Tab>"))
@@ -191,11 +216,13 @@ local run, err = xpcall(function()
   press "V<Tab>"
   ok("<Tab> on selected files unselects only those", selected() == 2, selected())
   press "<Tab>"
-  wait_for("another source", function() return source() and source() ~= "filesystem" end)
-  local after_tab = source()
+  ok(
+    "<Tab> changes the source while files are selected",
+    vim.wait(5000, function() return drawn_source() and drawn_source() ~= "filesystem" end, 20),
+    drawn_source()
+  )
   press "<S-Tab>"
-  wait_for("the Files source", function() return source() == "filesystem" end)
-  ok("<Tab> changes the source while files are selected", after_tab ~= nil)
+  wait_for("the Files source", function() return drawn_source() == "filesystem" end)
   wait_for("the files", function() return line_of "a.txt" end)
   go_to "a.txt"
   if selected() == 0 then press "V<Tab>" end
@@ -210,24 +237,6 @@ local run, err = xpcall(function()
   press "<Leader>gu"
   ok("<Leader>gu unstages it in Files", status() == " M b.txt\n", status())
   wait_for("the unstaged file", function() return line_of "c.txt" end)
-
-  go_to "b.txt"
-  press "i"
-  local details = vim.api.nvim_get_current_win()
-  local shown = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
-  ok("i shows the file's details", shown:find("Name: b.txt", 1, true) and shown:find "Size: ", shown)
-  ok(
-    "in a float in the middle of the screen",
-    vim.api.nvim_win_get_config(details).relative == "editor" and #windows_of "neo-tree-popup" == 0,
-    vim.inspect(vim.api.nvim_win_get_config(details))
-  )
-  press "<CR>"
-  ok("that Enter closes, back to the tree", not vim.api.nvim_win_is_valid(details) and source() == "filesystem")
-  ok(
-    "neo-tree's popup is its own again",
-    require("neo-tree.ui.popups").alert ~= nil
-      and debug.getinfo(require("neo-tree.ui.popups").alert, "S").source:find "neo%-tree"
-  )
 
   local function open_in_background(name)
     local buf = vim.fn.bufadd(dir .. "/" .. name)
@@ -278,8 +287,7 @@ local run, err = xpcall(function()
   end)
   ok("the tree is the window again", vim.api.nvim_get_current_win() == tree and source() == "git_status")
   press "<Leader>gx"
-  wait_for("the index to be emptied", function() return status() == " M b.txt\n" end)
-  ok("<Leader>gx unstages all", true)
+  ok("<Leader>gx unstages all", vim.wait(5000, function() return status() == " M b.txt\n" end, 20), status())
 
   local function head() return git(dir, "log", "-1", "--format=%s") end
   git(dir, "commit", "-q", "-am", "second")
@@ -339,12 +347,49 @@ local run, err = xpcall(function()
     vim.inspect(asked)
   )
   ok("and deletes it", branches() == started_on .. "\n", branches())
+
+  -- a remote with a branch that the repository has not heard of
+  git(dir, "init", "-q", "--bare", remote)
+  git(dir, "remote", "add", "origin", remote)
+  git(dir, "push", "-q", "origin", started_on)
+  git(remote, "branch", "feature", started_on)
+  with_notifications(function(notes)
+    press "<Leader>gf"
+    wait_for("the fetch", function() return #notes == 1 end)
+  end)
+  with_notifications(function(notes)
+    --- How many branches the open picker lists for what is typed in it
+    local function listed()
+      local open = require("snacks").picker.get({ source = "git_branches" })[1]
+      return open and vim.bo.filetype == "snacks_picker_input" and #open:items() or 0
+    end
+    press "<Leader>gb"
+    -- the branch that is checked out, and the two the remote has
+    wait_for("the picker of all branches", function() return listed() == 3 end)
+    press "ifeature"
+    -- Neovim reports typed text from its main loop, which this script does not return to
+    vim.api.nvim_exec_autocmds("TextChangedI", { buffer = 0 })
+    wait_for("the remote's new branch alone", function() return listed() == 1 end)
+    press "<CR>"
+    wait_for("the checkout", function() return #notes == 1 end)
+  end)
+  ok(
+    "<Leader>gb makes a branch that only the remote has a local one that follows it",
+    git(dir, "branch", "--show-current") == "feature\n"
+      and git(dir, "rev-parse", "--abbrev-ref", "feature@{upstream}") == "origin/feature\n",
+    branches()
+  )
   ok(
     "the tree is the window again after the pickers",
     vim.api.nvim_get_current_win() == tree and source() == "git_status"
   )
 
   ok("AstroNvim's tree event handlers are kept", #require("neo-tree").config.event_handlers > 1)
+
+  -- Not while neo-tree has yet to tell its sources of the last Git command: it would do so with the Files source
+  -- shown below, and puts a second refresh of Files off by another 100 ms. That is about when the test ends, and
+  -- Neovim exits with 1 when the refresh starts while it is exiting.
+  wait_for("the tree to hear of the last Git command", function() return not git_event_pending() end)
 
   -- which-key comes last: its trigger on <Leader> reads the next keys itself, which the presses above cannot feed.
   -- It finishes its setup on VimEnter, which comes after the -c commands this test runs in.
@@ -371,12 +416,5 @@ end, debug.traceback)
 -- not from inside it: what still runs before Neovim exits (a watcher on the repository) may ask for the directory
 vim.cmd.cd(started_in)
 vim.fn.delete(dir, "rf")
-if not run then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
-if #failures > 0 then
-  io.stderr:write(("%d of %d checks failed:\n"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    io.stderr:write("  - " .. failure .. "\n")
-  end
-  vim.cmd "cq"
-end
-print(("ok: %d checks"):format(count))
+vim.fn.delete(remote, "rf")
+harness.finish(run, err)

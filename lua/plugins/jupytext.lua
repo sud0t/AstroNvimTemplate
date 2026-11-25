@@ -1,15 +1,11 @@
--- jupytext.nvim: open .ipynb notebooks as plain text with `# %%` cells ("hydrogen" style), the same format as
--- the molten cell runner in plugins/jupyter.lua (<Leader>j...). Saving writes the .ipynb back,
--- keeping its outputs. Needs the jupytext CLI (`pipx install jupytext`).
---
--- Two gaps in the plugin (unmaintained since 2024) are covered here:
---   * it crashes on a notebook without `metadata.kernelspec` (made by jupytext, VS Code, some exports)
---   * it crashes on a notebook that does not exist yet; here that starts an empty `# %%` buffer and the
---     notebook is created on the first :w
+-- jupytext.nvim: .ipynb notebooks as `# %%` cells, the format of the cell runner in user/jupyter.lua. Saving
+-- writes the notebook back with its outputs. Needs the jupytext CLI (`pipx install jupytext`).
+-- The plugin (unmaintained since 2024) crashes on a notebook that names no kernel and on one that does not exist
+-- yet: both are handled here, the second as an empty buffer that becomes a notebook on the first :w.
 
 local language_extensions = { python = "py", julia = "jl", r = "r", R = "r", bash = "sh" }
 
--- language/extension of a notebook, with fallbacks for missing metadata
+-- For jupytext.nvim's get_ipynb_metadata: a notebook's language and file extension, Python when it names neither.
 local function notebook_metadata(filename)
   local f = io.open(filename, "r")
   local ok, nb = pcall(vim.json.decode, f and f:read "a" or "")
@@ -59,8 +55,9 @@ return {
   lazy = false,
   cond = vim.fn.executable "jupytext" == 1,
   opts = {
-    style = "hydrogen",
-    output_extension = "auto",
+    -- jupytext.nvim's default extension, "auto", makes the jupytext CLI refuse a notebook that names no language:
+    -- Python, the fallback above, is named outright
+    custom_language_formatting = { python = { extension = "py", style = "hydrogen" } },
   },
   config = function(_, opts)
     require("jupytext.utils").get_ipynb_metadata = notebook_metadata

@@ -1,14 +1,18 @@
--- Tests for <Leader>As and the providers behind it: lua/user/ai/init.lua (the windows, the state file, the
--- keys), lua/user/ai/providers.lua, lua/user/ai/openai.lua and lua/user/ai/claude.lua (what is sent, how an
--- answer is read), and the chat adapters in lua/plugins/codecompanion.lua.
---   nvim --clean -i NONE -l ~/.config/nvim/tests/ai_provider.lua
--- prints what failed and exits with 1, or "ok". Nothing is sent anywhere: `claude`, `curl`, `secret-tool` and
--- the pickers are stand-ins, and the state lives in a directory of its own.
+-- Tests for <Leader>As and what is behind it in lua/user/ai/: provider_menu.lua (the windows), state.lua (the
+-- state file), keys.lua, chat.lua (the chat a choice gets), providers.lua, openai.lua, claude.lua, ollama.lua
+-- and stream.lua (what is sent, how an answer is read), what <Leader>Ai, <Leader>Ac and <Leader>AR do around a
+-- request, where <Leader>AS opens a file, and the chat adapters in lua/plugins/codecompanion.lua.
+--   tests/run.sh ai_provider
+-- prints what failed and exits with 1, or "ok". Nothing is sent anywhere: `claude`, `curl`, `secret-tool`, `git`
+-- and the pickers are stand-ins, and the state lives in a directory of its own.
 -- What this cannot show is what the providers really answer. By hand, for each one you use: connect it in
 -- <Leader>As, run <Leader>Ai on a line, and open a chat (<Leader>AC) and ask it which model it is. For Claude
 -- through the login, <Leader>AC is Claude Code itself (tests/claude_code.lua) and the chat here is
 -- `:CodeCompanionChat`: choose each model in turn and ask a new chat the same.
 local uv = vim.uv
+
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+local ok = harness.ok
 
 local repo = vim.fs.dirname(vim.fs.dirname(assert(uv.fs_realpath(debug.getinfo(1, "S").source:sub(2)))))
 local plugins = vim.fn.stdpath "data" .. "/lazy"
@@ -23,11 +27,6 @@ for _, name in ipairs { "codecompanion.nvim", "plenary.nvim", "astrocore" } do
   vim.opt.rtp:append(plugins .. "/" .. name)
 end
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
 local function has(text, piece) return type(text) == "string" and text:find(piece, 1, true) ~= nil end
 
 ---------------------------------------------------------------------------------------------------- stand-ins
@@ -36,7 +35,7 @@ local state_file = vim.fn.stdpath "state" .. "/ai_provider.json"
 local key_vars = { "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY" }
 
 -- what is installed, logged in and stored: { cli, login, plan, bridge, keyring = { [account] = key } or false,
--- curl = function(url, call) -> { code, stdout, chunks } }
+-- curl = function(url, call) -> { code, stdout, chunks }, git = function(line) -> stdout }
 local world = {}
 local shown, picks, typed, secrets, notes, ran = {}, {}, {}, {}, {}, {}
 
@@ -56,8 +55,8 @@ vim.fn.exepath = function(name) return "/bin/" .. name end
 vim.fn.inputsecret = function() return table.remove(secrets, 1) or "" end
 vim.ui.input = function(_, on_confirm) on_confirm(table.remove(typed, 1)) end
 
---- `claude`, `secret-tool` and `curl`. Every call but `claude auth status` is recorded in `ran`, a curl call
---- with its url and the request it was given.
+--- `claude`, `secret-tool`, `curl` and `git`. Every call but `claude auth status` is recorded in `ran`, a curl
+--- call with its url and the request it was given (in a file, or on stdin as Ollama gets it).
 vim.system = function(cmd, opts, on_exit)
   opts = opts or {}
   local res = { code = 0, signal = 0, stdout = "", stderr = "" }
@@ -90,9 +89,15 @@ vim.system = function(cmd, opts, on_exit)
       for _, arg in ipairs(cmd) do
         if arg:find "^https?://" then call.url = arg end
         local file = arg:match "^@(.+)$"
-        if file then call.body = vim.json.decode(table.concat(vim.fn.readfile(file), "\n")) end
+        if file == "-" then
+          call.body = vim.json.decode(opts.stdin)
+        elseif file then
+          call.body = vim.json.decode(table.concat(vim.fn.readfile(file), "\n"))
+        end
       end
       res = vim.tbl_extend("force", res, world.curl and world.curl(call.url, call) or {})
+    elseif cmd[1] == "git" then
+      res.stdout = world.git and world.git(call.line) or ""
     end
   end
   for _, chunk in ipairs(res.chunks or {}) do
@@ -172,7 +177,7 @@ local function all_notes() return table.concat(notes, "\n") end
 local function curls()
   return vim.tbl_filter(function(c) return c.cmd[1] == "curl" end, ran)
 end
---- The row a window starts on, as the picker is told (lua/user/ai/settings.lua); nil: the first.
+--- The row a window starts on, as the picker is told (lua/user/ai/windows.lua); nil: the first.
 local function cursor(window)
   local row
   local on_show = vim.tbl_get(window, "opts", "snacks", "on_show")
@@ -183,7 +188,7 @@ end
 ---------------------------------------------------------------------------------------------------- state
 
 local ai = session(nil)
-ok("no state: local", ai.is_local() and ai.label() == ai.local_model(), ai.label())
+ok("no state: local", ai.is_local() and ai.label() == require("user.ai.ollama").model, ai.label())
 ai = session { provider = "claude", route = "login", model = "opus" }
 ok("an earlier state file", ai.label() == "Claude Opus 5.5" and ai.claude_model() == "opus", ai.label())
 ai = session { provider = "claude", route = "api", model = "fable" }
@@ -209,7 +214,6 @@ ok("a provider that is not known: local", ai.is_local())
 
 local claude = require "user.ai.claude"
 local providers = require "user.ai.providers"
-ok("Claude's models", vim.deep_equal(claude.order, { "fable", "opus", "sonnet", "haiku" }))
 for _, model in ipairs(claude.order) do
   ok(
     "listed model has an entry: " .. model,
@@ -276,10 +280,9 @@ ok(
 ok("nothing set up: Local is marked", vim.deep_equal(marked(shown[1]), { 1 }), rows(shown[1]))
 ok(
   "the prompt names what is in use",
-  shown[1].opts.prompt == "AI provider (now: " .. ai.local_model() .. ")",
+  shown[1].opts.prompt == "AI provider (now: " .. require("user.ai.ollama").model .. ")",
   shown[1].opts.prompt
 )
-ok("no text says Set up Claude", not has(rows(shown[1]), "Set up Claude"))
 
 ai = session(nil, { cli = true, login = true, plan = "max" })
 swap(ai, { false })
@@ -318,7 +321,7 @@ ok(
 )
 ok("and is the one marked", vim.deep_equal(marked(shown[1]), { 3 }), rows(shown[1]))
 local wizard = 0
-ai.setup = function(on_done)
+require("user.ai.provider_menu").setup = function(on_done)
   wizard = wizard + 1
   on_done { cli = true, login = true, key = true, keys = {} }
 end
@@ -406,10 +409,42 @@ ok("and says nothing leaves", has(notes[1], "nothing leaves this machine"), note
 ai = session(nil, { cli = true, login = true })
 swap(ai, { "Claude Code login", "Opus" })
 ok(
-  "without the bridge the note says the chat stays local",
-  has(notes[1], "Note: the chat stays local") and has(notes[1], "Set up provider"),
+  "without the bridge the note says which chats stay local",
+  has(notes[1], "Note: CodeCompanion chats (:CodeCompanionChat, a selection added with <Leader>Aa) stay local")
+    and has(notes[1], "Set up provider"),
   notes[1]
 )
+-- with a key and no bridge those chats are billed: said, not found out from the invoice
+ai = session(nil, { cli = true, login = true }, { ANTHROPIC_API_KEY = "sk-ant-test-key" })
+swap(ai, { "Claude Code login", "Opus" })
+ok(
+  "the login without the bridge, with a key: the note says those chats are billed",
+  vim.deep_equal({ (ai.chat_adapter()) }, { "anthropic" })
+    and has(notes[1], "Note: CodeCompanion chats use the Anthropic API key, billed per token")
+    and has(notes[1], "the chat bridge is not installed"),
+  notes[1]
+)
+ai = session({ provider = "claude", route = "api", model = "opus" }, {})
+local stays, why_local = ai.chat_adapter()
+ok(
+  "Claude by API key without a key: the chat stays local, and says why",
+  stays == "ollama" and has(why_local, "no Anthropic API key (<Leader>As, Set up provider)"),
+  vim.inspect { stays, why_local }
+)
+
+-- a choice that cannot be stored (here: a directory where the state file belongs)
+ai = session(nil, { cli = true, login = true, bridge = true })
+vim.fn.delete(state_file)
+vim.fn.mkdir(state_file, "p")
+swap(ai, { "Claude Code login", "Sonnet" })
+ok(
+  "a choice that cannot be stored: said, with the file's name",
+  said("Could not write " .. state_file) and said "holds until Neovim closes",
+  all_notes()
+)
+ok("and it holds for the session", ai.label() == "Claude Sonnet 5.5" and not ai.is_local(), ai.label())
+ok("nothing is left beside the file", #vim.fn.glob(state_file .. ".*", true, true) == 0)
+vim.fn.delete(state_file, "d")
 
 ---------------------------------------------------------------------------------------------------- keys
 
@@ -581,6 +616,7 @@ ai = session(
 swap(ai, { "Set up provider...", "OpenAI", "Astra" }, { secrets = { "sk-new-openai-key" } })
 local check = ran[#ran - 1] or { line = "", opts = {} }
 ok("the key is checked with the provider", check.url == "https://api.openai.com/v1/models", check.url)
+ok("which gets 20 seconds to answer", has(check.line, "--max-time 20"), check.line)
 ok(
   "it goes in on stdin, not on the command line",
   not has(check.line, "sk-new-openai-key")
@@ -599,7 +635,7 @@ ok(
   #(shown[3] or none).items == #providers.list.openai.models + 1 and has(rows(shown[3]), "Other..."),
   rows(shown[3])
 )
-ok("the cursor starts on the default", (shown[3] or none).opts.snacks ~= nil)
+ok("the cursor starts on the default", cursor(shown[3] or none) == 2, cursor(shown[3] or none))
 ok(
   "choosing one stores provider and model",
   vim.deep_equal(stored(), { provider = "openai", models = { openai = "gpt-6.2-astra" } }),
@@ -678,7 +714,7 @@ ok(
 )
 ok(
   "<Esc> goes back to the list, on its row",
-  (shown[4] or none).opts.prompt == "Set up provider" and (shown[4] or none).opts.snacks ~= nil
+  (shown[4] or none).opts.prompt == "Set up provider" and cursor(shown[4] or none) == 2
 )
 swap(ai, { "Set up provider...", "OpenAI", "Remove the key", false, false })
 ok(
@@ -708,7 +744,7 @@ ai = session(nil, {
   },
 })
 swap(ai, { "Set up provider...", "OpenRouter", false, false }, { secrets = { "sk-or-wrong-key-1" } })
-local sent = vim.tbl_filter(function(c) return c.cmd[1] == "curl" end, ran)
+local sent = curls()
 ok(
   "OpenRouter's key is checked where only a key gets through",
   #sent == 1 and sent[1].url == "https://openrouter.ai/api/v1/key",
@@ -793,6 +829,11 @@ ok("the API key runs curl", call.cmd[1] == "curl" and call.url == "https://api.a
 ok("the key is not on the command line", not has(call.line, "sk-ant-test-key"))
 ok("the key goes in on stdin", has(call.opts.stdin, "x-api-key: sk-ant-test-key"))
 ok("with the fallback header", has(call.opts.stdin, "anthropic-beta: server-side-fallback-2026-07-01"), call.opts.stdin)
+ok(
+  "and the API version, as Anthropic's own header and not a bearer token",
+  has(call.opts.stdin, 'header = "anthropic-version: 2026-10-21"') and not has(call.opts.stdin, "Authorization"),
+  call.opts.stdin
+)
 local body = call.body or {}
 ok("the request names Fable", body.model == "claude-fable-5-2", vim.inspect(body))
 ok(
@@ -804,6 +845,14 @@ ok(
   body.temperature == nil and body.top_p == nil and body.top_k == nil and body.thinking == nil
 )
 ok("has room for thinking and an answer", body.max_tokens == 16000)
+ok("gives a long answer ten minutes", has(call.line, "--max-time 600"), call.line)
+ai = session({ provider = "claude", route = "api", model = "haiku" }, {}, { ANTHROPIC_API_KEY = "sk-ant-test-key" })
+_, call = ask(ai)
+ok(
+  "Haiku has no fallback: neither asked for nor its header sent",
+  call.body.model == "claude-haiku-5-5" and call.body.fallbacks == nil and not has(call.opts.stdin, "anthropic-beta"),
+  call.opts.stdin
+)
 ai = session({ provider = "claude", route = "api", model = "fable" }, {})
 local got = ask(ai)
 ok(
@@ -859,11 +908,21 @@ ok(
 )
 ok("OpenAI: where it goes", call.url == "https://api.openai.com/v1/chat/completions", call.url)
 ok(
+  "OpenAI: ten minutes for an answer, and no redirect is followed with the key",
+  has(call.line, "--max-time 600") and not vim.list_contains(call.cmd, "-L") and not has(call.line, "--location"),
+  call.line
+)
+ok(
   "OpenAI: the key on stdin only",
   not has(call.line, "sk-env-key-1") and has(call.opts.stdin, 'header = "Authorization: Bearer sk-env-key-1"'),
   call.line
 )
 body = call.body or {}
+ok(
+  "OpenAI: nothing of Anthropic's goes along",
+  not has(call.opts.stdin, "anthropic") and not has(call.opts.stdin, "x-api-key") and body.fallbacks == nil,
+  call.opts.stdin
+)
 ok(
   "OpenAI: the request",
   body.model == "gpt-6.2-sol" and body.stream == true and body.max_completion_tokens == 16000 and body.max_tokens == nil,
@@ -1029,6 +1088,257 @@ ok(
   has(got.info.error, "no OpenRouter API key (<Leader>As, Set up provider)") and #ran == 0,
   vim.inspect(got)
 )
+local reported = false
+ai.chat(request, function() end, function() reported = true end).cancel()
+vim.wait(50)
+ok("a request that could not be sent is cancelled like any other: nothing is reported after it", not reported)
+
+-- which error is the one reported: the first of the stream, then curl's, then the status
+local rate_limit = { error = { code = 429, message = "Rate limit exceeded" } }
+ai = openrouter(sse { delta "Half", rate_limit, { error = { code = 500, message = "Later trouble" } } })
+got = ask(ai)
+ok("of two errors in a stream the first is reported", got.info.error == "Rate limit exceeded", vim.inspect(got))
+ai = openrouter(vim.tbl_extend("force", sse { delta "Half", rate_limit }, { code = 18 }))
+got = ask(ai)
+ok("an error in the stream comes before curl's exit code", got.info.error == "Rate limit exceeded", vim.inspect(got))
+ai = openrouter { stdout = '{"error":{"code":500,"message":"Upstream is down"}}\n500', code = 22 }
+got = ask(ai)
+ok("curl's exit code comes before the status", has(got.info.error, "curl exit code 22"), vim.inspect(got))
+ai = openrouter(sse { delta "Half", "data: [DONE]" })
+got = ask(ai)
+ok(
+  "[DONE] without a finish reason does not make an answer whole",
+  has(got.info.error, "ended the answer before it was finished"),
+  vim.inspect(got)
+)
+-- the key is put into curl's options where it is sent: only one that cannot add options gets that far
+ran = {}
+local sent_it, refusal = pcall(
+  require("user.ai.openai").chat,
+  request,
+  providers.list.openai,
+  { id = "gpt-6.2-sol" },
+  'sk-"\nurl = "https://evil.example',
+  function() end,
+  function() end
+)
+ok(
+  "a key that would add curl options is not sent, whoever hands it over",
+  not sent_it and #ran == 0 and not has(tostring(refusal), "evil"),
+  tostring(refusal)
+)
+sent_it, refusal = pcall(
+  require("user.ai.openai").verify,
+  providers.list.openai,
+  'sk-"\nurl = "https://evil.example',
+  function() end
+)
+ok("nor checked with the provider", not sent_it and #ran == 0 and not has(tostring(refusal), "evil"), tostring(refusal))
+
+---------------------------------------------------------------------------------------------------- Claude's API
+
+--- A stream as the Anthropic API sends it: every event under a line with its name.
+local function claude_sse(events, status)
+  local lines = {}
+  for i, event in ipairs(events) do
+    lines[i] = type(event) == "table" and ("event: %s\ndata: %s"):format(event.type, vim.json.encode(event)) or event
+  end
+  return sse(lines, status)
+end
+local function text_delta(text)
+  return { type = "content_block_delta", index = 0, delta = { type = "text_delta", text = text } }
+end
+local function stopped(reason)
+  return { type = "message_delta", delta = { stop_reason = reason }, usage = { output_tokens = 3 } }
+end
+local message_stop = { type = "message_stop" }
+local overloaded = { type = "error", error = { type = "overloaded_error", message = "Overloaded" } }
+local function anthropic(answer)
+  return session(
+    { provider = "claude", route = "api", model = "opus" },
+    { curl = function() return answer end },
+    { ANTHROPIC_API_KEY = "sk-ant-test-key" }
+  )
+end
+
+ai = anthropic(claude_sse {
+  { type = "message_start", message = { id = "msg_1", role = "assistant", content = {} } },
+  { type = "content_block_start", index = 0, content_block = { type = "text", text = "" } },
+  { type = "ping" },
+  text_delta "Hel",
+  text_delta "lo",
+  { type = "content_block_stop", index = 0 },
+  stopped "end_turn",
+  message_stop,
+})
+got = ask(ai)
+ok(
+  "Claude: the answer",
+  got.text == "Hello" and got.partial == "Hello" and got.info.error == nil and got.info.done_reason == nil,
+  vim.inspect(got)
+)
+-- a gateway ($ANTHROPIC_BASE_URL) may end lines with CR LF and keep the connection open with comments
+local behind_gateway = table.concat({
+  ": keep-alive",
+  "",
+  "event: content_block_delta",
+  "id: 7",
+  "retry: 3000",
+  "data: " .. vim.json.encode(text_delta "Hi"),
+  "",
+  ": keep-alive",
+  "event: message_stop",
+  "data: " .. vim.json.encode(message_stop),
+  "",
+  "",
+}, "\r\n") .. "\n200"
+ai = anthropic { stdout = behind_gateway }
+got = ask(ai)
+ok(
+  "Claude: comments, the other fields of an event and CR LF are passed over",
+  got.text == "Hi" and got.info.error == nil,
+  vim.inspect(got)
+)
+ai = anthropic(claude_sse {
+  text_delta "Hel",
+  { type = "content_block_delta", index = 0, delta = vim.NIL },
+  { type = "message_delta", delta = vim.NIL },
+  text_delta "lo",
+  stopped "end_turn",
+  message_stop,
+})
+got = ask(ai)
+ok(
+  "Claude: an event whose delta is null is passed over",
+  got.text == "Hello" and got.info.error == nil,
+  vim.inspect(got)
+)
+ai = anthropic(claude_sse { text_delta "Cut ", text_delta "off", stopped "max_tokens", message_stop })
+got = ask(ai)
+ok(
+  "Claude: the length limit is reported as such",
+  got.text == "Cut off" and got.info.error == nil and got.info.done_reason == "length",
+  vim.inspect(got)
+)
+ai = anthropic(claude_sse { text_delta "Half an ans" })
+got = ask(ai)
+ok(
+  "Claude: a stream that just ends is an error, with what came before it",
+  has(got.info.error, "the Anthropic API ended the answer before it was finished") and got.text == "Half an ans",
+  vim.inspect(got)
+)
+ai = anthropic(claude_sse { text_delta "Half", overloaded })
+got = ask(ai)
+ok(
+  "Claude: an error in the middle of the stream",
+  got.info.error == "Overloaded" and got.text == "Half",
+  vim.inspect(got)
+)
+ai = anthropic(claude_sse { text_delta "I can", stopped "refusal", message_stop })
+got = ask(ai)
+ok("Claude: a request it declines", got.info.error == "Claude declined this request", vim.inspect(got))
+ai = anthropic(claude_sse { stopped "refusal", overloaded, message_stop })
+got = ask(ai)
+ok("Claude: the first error is the one reported", got.info.error == "Claude declined this request", vim.inspect(got))
+ai = anthropic(vim.tbl_extend("force", claude_sse { text_delta "Half" }, { code = 28 }))
+got = ask(ai)
+ok(
+  "Claude: curl giving up is an error",
+  has(got.info.error, "no answer from the Anthropic API (curl exit code 28)"),
+  vim.inspect(got)
+)
+-- an error instead of a stream
+ai = anthropic { stdout = "<html>Bad gateway</html>\n502" }
+got = ask(ai)
+ok(
+  "Claude: an error that is not JSON is the status",
+  has(got.info.error, "the Anthropic API answered HTTP 502") and got.text == "",
+  vim.inspect(got)
+)
+ai = anthropic {
+  stdout = '{\n  "type": "error",\n  "error": {\n    "type": "authentication_error",\n    "message": "invalid x-api-key: sk-ant-test-key"\n  }\n}\n401',
+}
+got = ask(ai)
+ok(
+  "Claude: an error over several lines, and the key taken out of it",
+  got.info.error == "invalid x-api-key: ***",
+  vim.inspect(got)
+)
+ai = anthropic { stdout = '{"type":"error","error":{"type":"rate_limit_error"}}\n429' }
+got = ask(ai)
+ok("Claude: an error without a message is its type", got.info.error == "rate_limit_error", vim.inspect(got))
+
+---------------------------------------------------------------------------------------------------- the local model
+
+local ollama_answer = {
+  '{"message":{"role":"assistant","content":"<think>one line"}}',
+  '{"message":{"role":"assistant","content":" will do</think>Hel"}}',
+  '{"message":{"role":"assistant","content":"lo"},"done":true,"done_reason":"stop"}',
+}
+local in_memory = {
+  models = {
+    { name = "qwen3:4b-instruct", size = 10, size_vram = 4 },
+    { name = "pushed-out:1b", size = 10, size_vram = 4 },
+    { name = "on-the-gpu:1b", size = 10, size_vram = 10 },
+  },
+}
+--- Ollama: `answer` are the lines of /api/chat (or what curl ends with).
+local function ollama(answer)
+  return session(nil, {
+    curl = function(url)
+      if has(url, "/api/chat") then return answer.code and answer or { stdout = table.concat(answer, "\n") .. "\n" } end
+      if has(url, "/api/ps") then return { stdout = vim.json.encode(in_memory) } end
+    end,
+  })
+end
+local function called(path)
+  return vim.tbl_filter(function(c) return has(c.url, "http://localhost:11434" .. path) end, curls())
+end
+ai = ollama(ollama_answer)
+got = ask(ai)
+ok(
+  "local: the answer, without the model's thinking",
+  got.text == "Hello" and got.info.error == nil and got.info.done_reason == "stop",
+  vim.inspect(got)
+)
+call = called("/api/chat")[1] or { line = "", opts = {}, body = {} }
+ok(
+  "local: the request goes to Ollama on stdin, with no key and no options for curl",
+  vim.deep_equal(call.body, vim.json.decode(call.opts.stdin)) and not has(call.line, "--config"),
+  call.line
+)
+ok(
+  "local: the model answers at once, as a stream, and stays loaded for the next action",
+  call.body.model == require("user.ai.ollama").model
+    and call.body.stream == true
+    and call.body.think == false
+    and call.body.keep_alive == "5m"
+    and call.body.options.num_predict == 16000,
+  vim.inspect(call.body)
+)
+local unloaded = vim.tbl_map(function(c) return vim.json.decode(c.cmd[#c.cmd]) end, called "/api/generate")
+ok(
+  "local: after the answer, a model that was pushed off the GPU is unloaded; the one in use and one that fits stay",
+  vim.deep_equal(unloaded, { { model = "pushed-out:1b", keep_alive = 0 } }),
+  vim.inspect(unloaded)
+)
+ai = ollama { '{"message":{"content":"Half"}}', '{"error":"model requires more system memory"}' }
+got = ask(ai)
+ok(
+  "local: an error in the stream",
+  got.info.error == "model requires more system memory" and got.text == "Half",
+  vim.inspect(got)
+)
+ai = ollama { '{"message":{"content":"All of it"}}' }
+got = ask(ai)
+ok(
+  "local: Ollama's answer is over when its stream is: nothing has to say so",
+  got.text == "All of it" and got.info.error == nil,
+  vim.inspect(got)
+)
+ai = ollama { code = 7 }
+got = ask(ai)
+ok("local: Ollama is not running", got.info.error == "no answer from Ollama (is it running?)", vim.inspect(got))
 
 ---------------------------------------------------------------------------------------------------- Claude's setup
 
@@ -1050,6 +1360,27 @@ ok(
   all_notes()
 )
 ok("and the providers are back", #shown == 4 and shown[4].opts.prompt:find "^AI provider" ~= nil, #shown)
+world.curl = answers {
+  ["api.anthropic.com/v1/models"] = {
+    stdout = '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key: sk-ant-wrong-key-9"}}\n401',
+  },
+}
+swap(ai, { "Set up provider...", "Claude", "Replace it", false }, { secrets = { "sk-ant-wrong-key-9" } })
+ok(
+  "an Anthropic key that is not accepted: the stored one stays",
+  world.keyring[ring] == "sk-ant-ring-key-1" and said "The key was not accepted",
+  all_notes()
+)
+ok(
+  "Anthropic's message is shown without the key",
+  said "invalid x-api-key: ***" and not has(all_notes(), "sk-ant-wrong-key-9"),
+  all_notes()
+)
+ok(
+  "the check gets 20 seconds, and the key went in on stdin",
+  #curls() == 1 and has(curls()[1].line, "--max-time 20") and not has(curls()[1].line, "sk-ant-wrong-key-9"),
+  curls()[1] and curls()[1].line
+)
 world.curl = anthropic_ok
 swap(ai, { "Set up provider...", "Claude", "Replace it", false }, { secrets = { "sk-ant-new-key-2" } })
 ok(
@@ -1149,13 +1480,263 @@ for _, case in ipairs {
     end
     error "ENOENT: no such file or directory (cmd): 'curl'"
   end
-  local ran_it, why = pcall(ai.chat, request, function() end, function() end)
+  local why
+  local ran_it, stand_in = pcall(ai.chat, request, function() end, function(_, info) why = info.error end)
   vim.system = system
+  ok(case[1] .. ": a request that cannot start does not raise", ran_it and type(stand_in.cancel) == "function")
+  ok(case[1] .. ": nor answer before the caller has its handle", why == nil, why)
+  vim.wait(50)
   ok(
-    case[1] .. ": a request that cannot start says why and leaves no file",
-    not ran_it and has(tostring(why), "ENOENT") and file ~= nil and vim.uv.fs_stat(file) == nil,
+    case[1] .. ": it fails as any request does, says why and leaves no file",
+    has(why, "ENOENT") and file ~= nil and vim.uv.fs_stat(file) == nil,
     tostring(why)
   )
+end
+
+---------------------------------------------------------------------------------------------------- the actions
+
+local function floats()
+  return vim.tbl_filter(
+    function(win) return vim.api.nvim_win_get_config(win).relative ~= "" end,
+    vim.api.nvim_list_wins()
+  )
+end
+--- A new buffer with these lines, in the window.
+local function buffer(lines)
+  vim.cmd.enew()
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  return vim.api.nvim_get_current_buf()
+end
+local function gits()
+  return vim.tbl_filter(function(c) return c.cmd[1] == "git" end, ran)
+end
+local openai = { provider = "openai", models = { openai = "gpt-6.2-sol" } }
+local openai_key = { OPENAI_API_KEY = "sk-env-key-1" }
+
+-- the selection of <Leader>Ai and <Leader>AR
+local stream = require "user.ai.stream"
+buffer { "one", "two", "three" }
+ok("no selection: none", stream.selection() == nil)
+vim.cmd "normal! GVgg"
+local from, to = stream.selection()
+ok(
+  "a selection made upwards is first to last all the same, and visual mode is left",
+  from == 0 and to == 2 and vim.fn.mode() == "n",
+  vim.inspect { from, to, vim.fn.mode() }
+)
+
+-- <Leader>Ai
+ai = session(openai, {}, openai_key)
+buffer { ("x"):rep(150001), "the rest" }
+vim.cmd "normal! ggV"
+typed = { "shorten it" }
+require("user.ai.inline").run()
+settle()
+ok(
+  "inline: a selection that is too long names who it is too long for",
+  said(("The selection is too long for %s (150001 characters)"):format(ai.label()))
+    and not said "the local model"
+    and #curls() == 0,
+  all_notes()
+)
+
+-- <Leader>AR
+local fix = table.concat({
+  "**`<module>`**: divides by zero when nothing was counted",
+  "> `mean = total / count`",
+  "````",
+  "total = 10",
+  "mean = count > 0 and total / count or 0",
+  "print(mean)",
+  "````",
+}, "\n")
+local code = { "total = 10", "mean = total / count", "print(mean)" }
+ai = session(openai, { curl = function() return sse { delta(fix), delta("", "stop") } end }, openai_key)
+local review = require "user.ai.review"
+local closed = buffer(code)
+review.run()
+ok("review: the answer is shown in a corner window while it is written", #floats() == 1, #floats())
+local second = buffer(code) -- (the reviewed buffer leaves the window before the answer is there)
+settle()
+ok(
+  "review: fixes for a buffer that is not on screen wait for it",
+  said "1 fixes ready, shown when you return to" and #floats() == 0,
+  all_notes()
+)
+vim.cmd.bdelete { closed, bang = true }
+notes = {}
+review.run()
+ok(
+  "review: fixes that waited in a buffer closed since do not block the next review",
+  said "Reviewing buffer" and not said "Finish the fixes on screen first",
+  all_notes()
+)
+buffer { "elsewhere" }
+settle()
+notes = {}
+vim.cmd.buffer(closed)
+settle()
+ok("review: the closed buffer, opened again, does not start the other review's fixes", not said "Fix 1/1", all_notes())
+vim.cmd.bwipeout { closed, bang = true }
+vim.cmd.bwipeout { second, bang = true }
+
+ai = session(openai, { curl = function() return sse { delta(fix), delta("", "stop") } end }, openai_key)
+closed = buffer(code)
+require("user.ai.review").run()
+second = buffer(code)
+vim.cmd.bdelete { closed, bang = true } -- (before the answer is there)
+settle()
+ok(
+  "review: the answer for a buffer that was closed meanwhile is dropped",
+  #floats() == 0 and said "Reviewing buffer" and not said "fixes ready",
+  all_notes()
+)
+vim.cmd.bwipeout { closed, bang = true }
+vim.cmd.bwipeout { second, bang = true }
+
+ai = session(openai, {}, openai_key)
+buffer(code)
+local system = vim.system
+vim.system = function() error "ENOENT: no such file or directory (cmd): 'curl'" end
+local reviewing = pcall(require("user.ai.review").run)
+vim.system = system
+settle()
+ok(
+  "review: a request that cannot start is reported, and its window does not stay",
+  reviewing and #floats() == 0 and said "Request failed:" and said "ENOENT",
+  all_notes()
+)
+for _, win in ipairs(floats()) do
+  vim.api.nvim_win_close(win, true)
+end
+
+-- <Leader>Ac
+local work = base .. "/work"
+vim.fn.mkdir(work .. "/.git", "p")
+local staged = true
+local patch, subjects = "diff --git a/mean.lua b/mean.lua\n-mean = total / count\n+mean = 0", "Add the mean"
+local function git(line)
+  if has(line, "rev-parse --show-toplevel") then return work end
+  if has(line, "--stat") then return staged and " mean.lua | 2 +-\n 1 file changed" or "" end
+  if has(line, "--numstat") then return "1\t1\tmean.lua" end
+  if has(line, "--patch") then return patch end
+  if has(line, "log -8") then return subjects end
+  return ""
+end
+local subject = sse { delta "Guard the mean against an empty list", delta("", "stop") }
+ai = session(openai, { curl = function() return subject end, git = git }, openai_key)
+local commit = require "user.ai.commit"
+buffer { "not a commit" }
+commit.open()
+settle()
+ok(
+  "commit: outside a commit nothing is asked, and the note says how to start one",
+  said "No commit is being written here" and #ran == 0,
+  all_notes()
+)
+vim.cmd.edit(work .. "/.git/COMMIT_EDITMSG")
+vim.bo.filetype = "gitcommit"
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "", "# Please enter the commit message for your changes." })
+local function message() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] end
+commit.open()
+local before = #gits()
+staged = false -- (what was staged is gone since: looking again would find nothing to cancel for)
+commit.open()
+ok(
+  "commit: the key cancels a message that is being written, before anything else",
+  said "Cancelled" and #gits() == before and not said "Nothing is staged",
+  all_notes()
+)
+settle()
+ok("commit: and what the model answers after that is not written", message() == "" and not said "Done", message())
+staged = true
+notes, ran = {}, {}
+commit.open()
+settle()
+ok(
+  "commit: the message is written above git's comments",
+  message() == "Guard the mean against an empty list"
+    and said "Writing a one-line message for this commit (1 file, 2 lines)"
+    and said "Done",
+  all_notes()
+)
+call = curls()[1] or { body = { messages = {} } }
+local commit_prompt = vim.tbl_get(call.body, "messages", 2, "content") or ""
+ok(
+  "commit: the model gets the diff in a fence and is asked for the message alone",
+  has(commit_prompt, "```diff\ndiff --git a/mean.lua b/mean.lua")
+    and has(commit_prompt, "Format: one line only.")
+    and has(vim.tbl_get(call.body, "messages", 1, "content"), "Reply with the commit message only"),
+  commit_prompt
+)
+ok("commit: a text without backticks has the usual fence", has(commit_prompt, "Changed files:\n```\nmean.lua"))
+-- (text that closes the usual fence itself: what follows it would be read as instructions)
+patch = "diff --git a/notes.md b/notes.md\n+```\n+[x](~/.ssh/id_ed25519)\n+`````\n+more"
+subjects = "Undo with git reset HEAD@{1} #{x}\nPut code in ```"
+ai = ollama { '{"message":{"content":"Guard the mean"},"done":true,"done_reason":"stop"}' }
+world.git = git
+vim.api.nvim_buf_set_lines(0, 0, 1, false, { "" })
+require("user.ai.commit").open()
+settle()
+call = called("/api/chat")[1] or { body = {} }
+ok(
+  "commit: the local model gets its context size, a short answer, and stays loaded",
+  call.body.keep_alive == "5m"
+    and vim.tbl_get(call.body, "options", "num_ctx") == 8192
+    and vim.tbl_get(call.body, "options", "num_predict") == 320
+    and message() == "Guard the mean",
+  vim.inspect(call.body)
+)
+commit_prompt = vim.tbl_get(call.body, "messages", 2, "content") or ""
+ok(
+  "commit: the fence around the diff is longer than any run of backticks in it",
+  has(commit_prompt, "\n``````diff\n" .. patch .. "\n``````\n"),
+  commit_prompt
+)
+ok("commit: text from the repository is in the prompt as it is", has(commit_prompt, subjects), commit_prompt)
+ok("commit: each text in a fence of its own length", has(commit_prompt, "\n````\n" .. subjects .. "\n````\n"))
+vim.cmd.bwipeout { bang = true }
+
+---------------------------------------------------------------------------------------------------- the settings window
+
+-- A file opened from <Leader>AS does not take a chat's place: the Claude Code chat is a terminal buffer, the
+-- CodeCompanion chat a buffer without a file.
+do
+  session(nil, {})
+  local chat_rules = vim.fn.stdpath "config" .. "/ai-rules-local.md"
+  local chats = {
+    { "the Claude Code chat", function(buf) vim.api.nvim_open_term(buf, {}) end },
+    { "the CodeCompanion chat", function(buf) vim.bo[buf].filetype = "codecompanion" end },
+  }
+  for _, chat in ipairs(chats) do
+    for _, beside_a_file in ipairs { true, false } do
+      vim.cmd "silent! %bwipeout!"
+      vim.cmd "silent! only"
+      local file_win = vim.api.nvim_get_current_win()
+      if beside_a_file then vim.cmd.split() end
+      local chat_win, chat_buf = vim.api.nvim_get_current_win(), vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_win_set_buf(chat_win, chat_buf)
+      chat[2](chat_buf)
+      picks = { "Chat rules" }
+      require("user.ai.settings").open()
+      local here = vim.api.nvim_get_current_win()
+      ok(
+        ("settings: a file opened from %s %s"):format(
+          chat[1],
+          beside_a_file and "goes to the window that shows a file"
+            or "gets a window of its own when no other shows a file"
+        ),
+        vim.api.nvim_buf_get_name(0) == chat_rules
+          and vim.api.nvim_win_is_valid(chat_win)
+          and vim.api.nvim_win_get_buf(chat_win) == chat_buf
+          and here ~= chat_win
+          and (here == file_win) == beside_a_file,
+        vim.inspect { vim.api.nvim_buf_get_name(0), here, chat_win, file_win }
+      )
+    end
+  end
+  vim.cmd "silent! %bwipeout!"
+  vim.cmd "silent! only"
 end
 
 ---------------------------------------------------------------------------------------------------- the chats
@@ -1203,6 +1784,20 @@ end
 local apply = require("codecompanion.interactions.chat.acp.defaults").apply
 local offered = { "default", "fable", "opus", "sonnet", "haiku" }
 local adapter = opts.adapters.acp.claude_code()
+
+-- the providers' key variables are named in several files: each one in every place
+local started_without = table
+  .concat(vim.fn.readfile(repo .. "/lua/user/ai/claude_code.lua"), "\n")
+  :match "\nlocal not_passed = (%b{})" or ""
+ok("Claude Code is started without the Anthropic key", has(started_without, '"ANTHROPIC_API_KEY"'), started_without)
+for _, id in ipairs(providers.order) do
+  for _, name in ipairs(providers.list[id].env) do
+    ok("a session of this test starts without $" .. name, vim.list_contains(key_vars, name))
+    ok("Claude Code is started without $" .. name, has(started_without, ('"%s"'):format(name)), started_without)
+    local for_bridge = adapter.env[name]
+    ok("the Claude Code chat gets $" .. name .. " empty", type(for_bridge) == "function" and for_bridge() == "")
+  end
+end
 local conn, wanted = connection(offered, "default")
 apply(adapter, conn)
 ok(
@@ -1267,7 +1862,7 @@ local model_list = vim.json.encode {
 }
 ai = session(
   { provider = "claude", route = "api", model = "fable" },
-  { curl = answers { ["api.anthropic.com/v1/models"] = { stdout = model_list } } },
+  { curl = answers { ["api.anthropic.com/v1/models"] = { stdout = model_list .. "\n200" } } },
   { ANTHROPIC_API_KEY = "sk-ant-test-key" }
 )
 opts = options()
@@ -1330,6 +1925,25 @@ ok(
   vim.deep_equal(adapter.raw, { "--max-redirs", "0" }),
   vim.inspect(adapter.raw)
 )
+-- curl is not installed, and then it is
+ai = session(
+  { provider = "claude", route = "api", model = "fable" },
+  { curl = answers { ["api.anthropic.com/v1/models"] = { stdout = model_list .. "\n200" } } },
+  { ANTHROPIC_API_KEY = "sk-ant-test-key" }
+)
+local chat_models = require("user.ai.claude").chat_models
+system = vim.system
+vim.system = function() error "ENOENT: no such file or directory (cmd): 'curl'" end
+local started, no_curl = pcall(chat_models, "sk-ant-test-key", { async = false })
+vim.system = system
+ok("a request for the models that cannot start says why", not started and has(no_curl, "ENOENT"), tostring(no_curl))
+ran = {}
+choices = chat_models("sk-ant-test-key", { async = false })
+ok(
+  "and the next one is made, not waited for in vain",
+  #ran == 1 and vim.tbl_get(choices, "claude-fable-5-2", "meta", "max_tokens") == 128000,
+  vim.inspect { #ran, choices }
+)
 -- CodeCompanion asks for the choices several times per chat: that never waits for a keyring
 ai = session({ provider = "claude", route = "api", model = "opus" }, { keyring = {}, keyring_hangs = true })
 adapter = options().adapters.http.anthropic()
@@ -1388,11 +2002,4 @@ end
 ---------------------------------------------------------------------------------------------------- result
 
 vim.fn.delete(base, "rf")
-if #failures > 0 then
-  print(("%d of %d checks failed:"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    print("  - " .. failure)
-  end
-  os.exit(1)
-end
-print(("ok: %d checks"):format(count))
+harness.report()

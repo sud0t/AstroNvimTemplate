@@ -1,27 +1,12 @@
--- The file tree's keys.
---   <Tab> / <S-Tab>        next and previous source (Files, Buffers, Git), as they change buffers outside the tree
---   <Tab> in visual mode   selects the highlighted files, or unselects them when all of them are selected
---   <Esc>                  drops the selection
---   <Leader>               only the tree's own keys, the same in every source, each for the row under the cursor:
---                          Git commands (<Leader>g), find and terminal in its folder (<Leader>f, <Leader>t), close
---                          its buffer (<Leader>x). The global <Leader> keys do nothing in the tree and stay out of
---                          its which-key popup.
---   <Leader>g              is where everything that changes the repository is done (user/git.lua); the Git keys
---                          of a file buffer only look (plugins/gitsigns.lua, astrocore.lua, snacks.lua,
---                          diffview.lua).
---   <Leader>gc, <Leader>gg write the commit message in a floating window (user/git_commit.lua), in place of
---                          neo-tree's one-line prompt, and first stage the file under the cursor when it has
---                          changes of which none is staged. <Leader>gC amends the last commit in that window.
---   <Leader>gp, gl, gr, gU ask first, in a picker in the middle of the screen, as <Leader>gd and <Leader>gD do
---                          once a branch or a stash is picked
---   i                      neo-tree's file details, in a float in the middle of the screen
--- A key set to false is one that neo-tree or AstroNvim maps in the tree. neo-tree 3.42 compares these keys as they
--- are written (its normalize_mappings never finds the table), so each is spelled as neo-tree's defaults.lua spells
--- it, or the default stays.
+-- The file tree's keys. <Leader> lists only the tree's own keys, the same in every source, each acting on the row
+-- under the cursor; the global <Leader> keys are hidden here (user/hidden_keys.lua). Everything that changes the
+-- repository is on <Leader>g (user/git.lua, user/git_prompts.lua, user/git_commit.lua): a file buffer's Git keys
+-- only look.
+-- A key set to false is one that neo-tree or AstroNvim maps. neo-tree 3.42 compares these keys as written (its
+-- normalize_mappings never finds the table), so each is spelled as neo-tree's defaults.lua spells it.
 
---- neo-tree only maps a key in visual mode as the twin of a normal mode command on the same key, and hands that
---- twin the files selected earlier as well. <Tab> changes the source in normal mode, so its visual mode mapping is
---- set on the tree buffer directly.
+--- <Tab> in visual mode. neo-tree maps a visual mode key only as the twin of the same key's normal mode command
+--- (<Tab>: the next source), and hands the twin the rows selected earlier as well: so the tree buffer maps this.
 local function select_highlighted()
   local state = assert(require("neo-tree.sources.manager").get_state_for_window(), "not in a neo-tree window")
   local first, last = vim.fn.line "v", vim.fn.line "."
@@ -50,7 +35,7 @@ local function repository_changed()
   vim.cmd.checktime()
 end
 
---- The repository a tree shows, as the commands of user/git.lua and user/git_commit.lua take it.
+--- The repository a tree shows, as user/git.lua, user/git_prompts.lua and user/git_commit.lua take it.
 ---@param state neotree.State
 ---@return user.git.Repository
 local function repository(state) return { dir = state.path, on_change = repository_changed } end
@@ -60,46 +45,6 @@ local function repository(state) return { dir = state.path, on_change = reposito
 local function row(state)
   local node = state.tree:get_node()
   return node and node.type ~= "message" and node or nil
-end
-
---- Runs `action` once the question is answered with Yes. No comes first, so that it is what Enter alone answers.
----@param question string
----@param action fun()
-local function confirmed(question, action)
-  vim.ui.select({ "No", "Yes" }, { prompt = question }, function(answer)
-    if answer == "Yes" then action() end
-  end)
-end
-
---- Shows lines in a float in the middle of the screen, which q, Esc and Enter close.
----@param title string
----@param lines string[]
-local function show_in_float(title, lines)
-  local width = 0
-  for _, line in ipairs(lines) do
-    width = math.max(width, vim.api.nvim_strwidth(line))
-  end
-  require("snacks").win {
-    text = lines,
-    title = " " .. title .. " ",
-    border = true,
-    backdrop = false,
-    width = width + 2,
-    height = #lines,
-    keys = { ["<Esc>"] = "close", ["<CR>"] = "close" },
-  }
-end
-
---- neo-tree's file details. Its command works them out and hands them to neo-tree's popup, which opens at the
---- cursor's row and over the buffer beside the tree: the float above takes its place while the command runs.
----@param state neotree.State
-local function file_details(state)
-  local popups = require "neo-tree.ui.popups"
-  local alert = popups.alert
-  popups.alert = show_in_float
-  local shown, problem = pcall(require("neo-tree.sources.common.commands").show_file_details, state)
-  popups.alert = alert
-  if not shown then error(problem, 0) end
 end
 
 ---@param state neotree.State
@@ -112,89 +57,6 @@ local function commit(state, how)
     -- an amend is of the last commit and what was staged for it by hand
     stage = on_file and not how.amend and node:get_id() or nil,
   }))
-end
-
---- Opens one of snacks' Git pickers on the tree's repository, and hands what is picked in it to `on_pick`. The
---- pickers that change a repository are opened from the tree only (astrocore.lua drops their global keys), and
---- change it through user/git.lua, which tells the tree when it is done.
----@param state neotree.State
----@param picker snacks.picker.Config the source, and a title that says what Enter does: a source has several keys
----@param on_pick fun(repo: user.git.Repository, item: snacks.picker.Item)
-local function pick(state, picker, on_pick)
-  local repo = repository(state)
-  require("snacks").picker.pick(vim.tbl_extend("error", picker, {
-    cwd = repo.dir,
-    -- the tree: without it a closed picker leaves for the window it would have opened a file in
-    main = { current = true },
-    confirm = function(open, item)
-      open:close()
-      -- not before the picker has left insert mode, which it does after this: a picker that `on_pick` opens to
-      -- ask a question would be left in normal mode with it
-      if item then vim.schedule(function() on_pick(repo, item) end) end
-    end,
-  }))
-end
-
----@param state neotree.State
-local function switch_branch(state)
-  pick(state, { source = "git_branches", title = "Switch branch" }, function(repo, item)
-    local ref = item.branch or item.commit
-    if ref then require("user.git").checkout(repo, ref) end
-  end)
-end
-
----@param state neotree.State
-local function new_branch(state)
-  vim.ui.input({ prompt = "New branch: " }, function(name)
-    if name and name ~= "" then require("user.git").create_branch(repository(state), name) end
-  end)
-end
-
----@param state neotree.State
-local function delete_branch(state)
-  local others = {
-    source = "git_branches",
-    title = "Delete a branch",
-    -- git deletes no branch that is checked out
-    transform = function(item) return not item.current end,
-  }
-  pick(state, others, function(repo, item)
-    if not item.branch then return end
-    local git = require "user.git"
-    local lost = git.commits_only_in(repo, item.branch)
-    local question = ("Delete branch %s?"):format(item.branch)
-    if lost > 0 then
-      local commits = lost == 1 and "1 commit" or (lost .. " commits")
-      question = ("%s It has %s the current branch does not."):format(question, commits)
-    end
-    confirmed(question, function() git.delete_branch(repo, item.branch) end)
-  end)
-end
-
----@param state neotree.State
-local function pop_stash(state)
-  pick(
-    state,
-    { source = "git_stash", title = "Apply a stash" },
-    function(repo, item) require("user.git").pop_stash(repo, item.stash) end
-  )
-end
-
----@param state neotree.State
-local function drop_stash(state)
-  pick(state, { source = "git_stash", title = "Drop a stash" }, function(repo, item)
-    confirmed(
-      ("Drop %s without applying it?"):format(item.stash),
-      function() require("user.git").drop_stash(repo, item.stash) end
-    )
-  end)
-end
-
----@param state neotree.State
-local function stash_changes(state)
-  vim.ui.input({ prompt = "Stash message (optional): " }, function(message)
-    if message then require("user.git").stash(repository(state), message) end
-  end)
 end
 
 --- The listed buffer that the file `path` is open in.
@@ -220,9 +82,6 @@ local function close_buffer(state)
   require("astrocore.buffer").close(buf)
 end
 
--- neo-tree maps i in each source, not for all of them, so each source is given this
-local file_details_key = { "file_details", desc = "Show file details" }
-
 ---@type LazySpec
 return {
   "nvim-neo-tree/neo-tree.nvim",
@@ -231,45 +90,27 @@ return {
       commit_in_editor = function(state) commit(state) end,
       commit_in_editor_and_push = function(state) commit(state, { push = true }) end,
       amend_in_editor = function(state) commit(state, { amend = true }) end,
-      -- named apart from neo-tree's git_push, git_pull, git_revert_file and git_undo_last_commit, which a source
-      -- prefers to a command of the same name given here; those wait for git, and ask and answer in popups of
-      -- their own at the cursor's row
-      push_in_background = function(state)
-        confirmed(
-          "Are you sure you want to push your changes?",
-          function() require("user.git").push(repository(state)) end
-        )
-      end,
-      pull_in_background = function(state)
-        confirmed("Run a git pull?", function() require("user.git").pull(repository(state)) end)
-      end,
+      -- Not named as neo-tree's git_push, git_pull, git_revert_file and git_undo_last_commit: a source prefers
+      -- its own command to one of the same name given here, and those wait for git and ask at the cursor's row.
+      push_in_background = function(state) require("user.git_prompts").push(repository(state)) end,
+      pull_in_background = function(state) require("user.git_prompts").pull(repository(state)) end,
       fetch_in_background = function(state) require("user.git").fetch(repository(state)) end,
-      undo_last_commit = function(state)
-        confirmed(
-          "Undo the last commit? Its changes stay staged.",
-          function() require("user.git").undo_last_commit(repository(state)) end
-        )
-      end,
-      file_details = file_details,
+      undo_last_commit = function(state) require("user.git_prompts").undo_last_commit(repository(state)) end,
       unstage_all = function(state) require("user.git").unstage_all(repository(state)) end,
       revert_file = function(state)
         local node = row(state)
-        if not node then return end
-        confirmed(
-          ("Are you sure you want to revert %s?"):format(node.name),
-          function() require("user.git").revert(repository(state), node:get_id()) end
-        )
+        if node then require("user.git_prompts").revert(repository(state), node:get_id(), node.name) end
       end,
       ignore_file = function(state)
         local node = row(state)
         if node then require("user.git").ignore(repository(state), node:get_id()) end
       end,
-      switch_branch = switch_branch,
-      new_branch = new_branch,
-      delete_branch = delete_branch,
-      stash_changes = stash_changes,
-      pop_stash = pop_stash,
-      drop_stash = drop_stash,
+      switch_branch = function(state) require("user.git_prompts").switch_branch(repository(state)) end,
+      new_branch = function(state) require("user.git_prompts").new_branch(repository(state)) end,
+      delete_branch = function(state) require("user.git_prompts").delete_branch(repository(state)) end,
+      stash_changes = function(state) require("user.git_prompts").stash(repository(state)) end,
+      pop_stash = function(state) require("user.git_prompts").pop_stash(repository(state)) end,
+      drop_stash = function(state) require("user.git_prompts").drop_stash(repository(state)) end,
       close_buffer = close_buffer,
       clear_selection_or_cancel = function(state)
         if next(state.selected) then
@@ -284,6 +125,7 @@ return {
     },
     window = {
       mappings = {
+        -- as <Tab> and <S-Tab> change buffers outside the tree
         ["<Tab>"] = "next_source",
         ["<S-Tab>"] = "prev_source",
         ["<C-S-i>"] = false, -- neo-tree's invert selection: the same key as <S-Tab>
@@ -332,7 +174,6 @@ return {
     filesystem = {
       window = {
         mappings = {
-          i = file_details_key,
           f = "filter_on_submit", -- neo-tree's own f; AstroNvim made it the prefix of the find keys
           ["f/"] = false,
           ff = false,
@@ -345,7 +186,6 @@ return {
     buffers = {
       window = {
         mappings = {
-          i = file_details_key,
           bd = false,
           d = false,
         },
@@ -354,7 +194,6 @@ return {
     git_status = {
       window = {
         mappings = {
-          i = file_details_key,
           A = false,
           ga = false,
           gu = false,

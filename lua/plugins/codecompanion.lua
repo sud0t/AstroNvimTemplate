@@ -1,38 +1,12 @@
 -- CodeCompanion (imported from AstroCommunity in community.lua): the chat <Leader>AC opens for every AI but
--- Claude through the Claude Code login, which gets Claude Code itself (lua/user/ai/init.lua, `open_chat`). The
+-- Claude through the Claude Code login, which gets Claude Code itself (lua/user/ai/chat.lua, `open_chat`). The
 -- other <Leader>A actions talk to the provider directly, without CodeCompanion (lua/user/ai/).
--- The chat uses the AI chosen with <Leader>As: Claude, another provider's model (lua/user/ai/providers.lua),
--- or by default a local Ollama model (<Leader>AS, Local model, changes which):
--- qwen3:4b-instruct (2.5GB), the same model <Leader>AR uses, so the two share one copy in memory. It mostly fits
--- in the T1000's 4GB next to the desktop (measured: ~70% of it on the GPU with 1.7GB of VRAM taken by other
--- programs, 7 tokens/s). qwen2.5-coder:7b (4.7GB) never fits: a third of it on the GPU, half that speed.
--- num_ctx is kept at 8k: enough for a ~600 line file, while the KV cache stays small enough
--- to leave most layers on the GPU.
--- The chat's tools are sandboxed by lua/user/ai/sandbox.lua (rules in srt-ai.json): commands run under srt, file
--- tools stay inside the project and away from the keyring, the password vault, browser profiles and everything
--- that runs as code outside the sandbox (the editor's own files, .git, shell startup files). When the sandbox
--- cannot be put in place the chat starts without tools (`locked_down` below).
-
-local prompt_library = {
-  -- <Leader>Ac, `:CodeCompanion /commitmsg`; the diff comes from lua/user/ai/commit.lua
-  ["Commit message"] = {
-    interaction = "chat",
-    description = "Write a commit message for the staged (or all) changes",
-    opts = {
-      alias = "commitmsg",
-      auto_submit = true,
-      ignore_system_prompt = true, -- the general chat instructions only take context away from the diff
-      stop_context_insertion = true,
-    },
-    prompts = {
-      {
-        role = "system",
-        content = function() return require("user.ai.commit").system "block" end,
-      },
-      { role = "user", content = function() return require("user.ai.commit").prompt() end },
-    },
-  },
-}
+-- The chat uses the AI chosen with <Leader>As: Claude, another provider's model (lua/user/ai/providers.lua), or
+-- by default the local model (`model` and `context` in lua/user/ai/ollama.lua), which <Leader>AR uses too, so
+-- one copy is in memory. Measured on the 4GB GPU next to the desktop: ~70% of it on the GPU, 7 tokens/s (a 7b
+-- model: a third, half the speed); 8k of context is a ~600 line file and leaves most layers on the GPU.
+-- The chat's tools are sandboxed by lua/user/ai/sandbox/ (docs/ai-sandbox.md); when that cannot be put in
+-- place the chat starts without tools (`locked_down` below).
 
 -- The server-side tools of CodeCompanion's adapters, switched off in the options below and in `locked_down()`.
 -- They run at the provider: past the sandbox and without asking, and the web tools among them would take the
@@ -63,16 +37,16 @@ local function no_server_tools(name)
   return tools
 end
 
---- The local chat's adapter. (Read each time a chat resolves its adapter: a model changed in <Leader>AS
---- applies to the chats opened after it.)
+--- The local chat's adapter: the model and context size of lua/user/ai/ollama.lua. The literals are copies
+--- on purpose, for when that does not load (see `locked_down`).
 local function ollama_adapter()
-  local known, model = pcall(function() return require("user.ai").local_model() end)
+  local loaded, ollama = pcall(require, "user.ai.ollama")
   return require("codecompanion.adapters").extend("ollama", {
     schema = {
-      model = { default = known and model or "qwen3:4b-instruct" },
+      model = { default = loaded and ollama.model or "qwen3:4b-instruct" },
       -- Ollama lists the model as able to think, so CodeCompanion would turn thinking on
       think = { default = false },
-      num_ctx = { default = 8192 },
+      num_ctx = { default = loaded and ollama.context or 8192 },
       temperature = { default = 0.2 }, -- focused answers for code review
       keep_alive = { default = "5m" }, -- give the VRAM back to the completion model when idle
     },
@@ -97,7 +71,7 @@ local claude_code = {
   parameters = { clientCapabilities = { fs = { readTextFile = false, writeTextFile = false } } },
 }
 
--- What the chat is left with when its sandbox cannot be put in place (lua/user/ai/sandbox.lua does not load, a
+-- What the chat is left with when its sandbox cannot be put in place (lua/user/ai/sandbox/ does not load, a
 -- CodeCompanion update took away what it wraps, or the options below fail): no tools, no rules files, the local
 -- model, and <Leader>As leaves it there (`vim.g.ai_chat_locked`). Spelled out here, with nothing from
 -- lua/user/ that is not asked for under pcall or only when it is used, so that it holds whatever else is broken.
@@ -139,8 +113,8 @@ local function locked_down()
       )
     end
   end
-  -- (CodeCompanion asks Anthropic for its models with the key among curl's arguments, where every process on
-  -- the machine can read it: here it gets a list without asking)
+  -- (CodeCompanion's own request for Anthropic's models is not to be made, `chat_models` in
+  -- lua/user/ai/claude.lua says why: here it gets a list without asking)
   adapters.anthropic = function()
     local model = { context_window = 1000000, max_tokens = 64000 }
     local known =
@@ -165,14 +139,13 @@ local function locked_down()
       },
     },
     rules = { opts = { chat = { enabled = false, autoload = {} }, inline = { autoload = {} }, show_presets = false } },
-    prompt_library = prompt_library, -- (<Leader>Ac outside a commit buffer)
   }
 end
 
 --- Put the sandbox in place: true, or false and the reason.
 local function install_sandbox()
   local loaded, sandbox = pcall(require, "user.ai.sandbox")
-  if not loaded then return false, "lua/user/ai/sandbox.lua does not load: " .. tostring(sandbox) end
+  if not loaded then return false, "lua/user/ai/sandbox/ does not load: " .. tostring(sandbox) end
   local called, ok, why = pcall(sandbox.install)
   if not called then return false, tostring(ok) end
   return ok, why
@@ -181,6 +154,8 @@ end
 ---@type LazySpec
 return {
   "olimorris/codecompanion.nvim",
+  -- community.lua turns the plugin off: it is on only when this file, which sandboxes it, could be loaded
+  enabled = true,
   -- the community module loads it on every opened file (~13ms); its commands, the <Leader>A mappings and
   -- require() already load it on demand
   event = function() return {} end,
@@ -237,16 +212,17 @@ return {
             maps.x[lhs], maps.v[lhs] = map, nil
           end
         end
-        -- <Leader>Ac writes a commit message for the current diff (lua/user/ai/commit.lua). The chat toggle the
-        -- community module has there is <Leader>AC, and opens the chat of the AI chosen: Claude Code or the
-        -- CodeCompanion chat (lua/user/ai/init.lua, `open_chat`).
+        -- <Leader>Ac writes the message of the commit that is being written (lua/user/ai/commit.lua). The chat
+        -- toggle the community module has there is <Leader>AC, and opens the chat of the AI chosen: Claude Code
+        -- or the CodeCompanion chat (lua/user/ai/chat.lua, `open_chat`).
         local chat = { function() require("user.ai").open_chat() end, desc = "AI chat (Claude Code, or CodeCompanion)" }
         maps.n["<Leader>AC"], maps.x["<Leader>AC"] = chat, chat
         maps.x["<Leader>Ac"] = nil
-        maps.n["<Leader>Ac"] = { function() require("user.ai.commit").open() end, desc = "Write commit message (diff)" }
+        maps.n["<Leader>Ac"] =
+          { function() require("user.ai.commit").open() end, desc = "Write commit message (commit buffer)" }
         -- <Leader>Ai: prompt the model from inside the buffer (lua/user/ai/inline.lua). It takes the place of
-        -- CodeCompanion's inline assistant (visual <Leader>Aq), which has no normal mode key and does not show
-        -- the answer while it is written.
+        -- CodeCompanion's inline assistant (visual <Leader>Aq; the normal-mode key is taken by
+        -- lua/plugins/minuet.lua), which does not show the answer while it is written.
         local inline = function() require("user.ai.inline").run() end
         maps.n["<Leader>Ai"] = { inline, desc = "Inline prompt (write at cursor)" }
         maps.x["<Leader>Ai"] = { inline, desc = "Inline prompt (rewrite selection)" }
@@ -255,7 +231,7 @@ return {
         maps.n["<Leader>Ap"], maps.x["<Leader>Ap"] = nil, nil
         maps.n["<Leader>As"] = { function() require("user.ai").select() end, desc = "AI provider and model" }
         maps.n["<Leader>AS"] =
-          { function() require("user.ai.settings").open() end, desc = "AI settings (rules, model, commit detail)" }
+          { function() require("user.ai.settings").open() end, desc = "AI settings (rules, tags, tool sandbox)" }
         local review = function() require("user.ai.review").run() end
         maps.n["<Leader>AR"] = { review, desc = "Review and fix inline (buffer)" }
         maps.x["<Leader>AR"] = { review, desc = "Review and fix inline (selection)" }
@@ -288,7 +264,7 @@ return {
       local off = function() return { enabled = false } end
       return require("astrocore").extend_tbl(opts, {
         interactions = {
-          -- the chat follows the provider chosen with <Leader>As (lua/user/ai/init.lua changes it for new chats)
+          -- the chat follows the provider chosen with <Leader>As (`apply_to_chat` in lua/user/ai/chat.lua changes it for new chats)
           chat = {
             adapter = (ai.chat_adapter()),
             tools = {
@@ -315,9 +291,8 @@ return {
             -- Claude with an API key ($ANTHROPIC_API_KEY or the system keyring) and the model chosen in <Leader>As
             anthropic = function()
               local claude = require "user.ai.claude"
-              -- What the models can do, asked from the API with the key on curl's stdin (lua/user/ai/claude.lua).
-              -- CodeCompanion's own request for it has the key among curl's arguments, where every process on
-              -- the machine can read it. Asked here, before a chat takes its settings from the answer;
+              -- What the models can do, asked from the API in place of CodeCompanion (`chat_models` in
+              -- lua/user/ai/claude.lua says why). Asked here, before a chat takes its settings from the answer;
               -- CodeCompanion asks `choices` several times per chat, which never waits for the keyring.
               claude.chat_models(ai.api_key(), { async = false })
               return require("codecompanion.adapters").extend("anthropic", {
@@ -355,18 +330,14 @@ return {
             end,
           },
         },
-        -- Instructions that go along with every chat. By default CodeCompanion attaches ~/.claude/CLAUDE.md and
-        -- the project's CLAUDE.md/AGENTS.md/.cursorrules/...: written for coding agents with large contexts, they
-        -- take up the local model's 8k context before the conversation starts. Only these are attached instead,
-        -- when they exist (<Leader>AS opens them):
-        --   ~/.config/nvim/ai-rules-local.md    for every project, in chats with the local model (keep it short)
-        --   ~/.config/nvim/ai-rules-cloud.md    for every project, in chats with a provider's model
-        --   .nvim-ai.md                         in a project's root (the directory Neovim was started in), once
-        --                                       you have approved what it says (<Leader>AS, Project rules: a
-        --                                       repository can bring one along)
-        -- A chat gets the group of the model it talks to (lua/user/ai/init.lua, `rules_group`: asked for each
-        -- new chat). CodeCompanion's own groups (CLAUDE.md and the like, which can pull in any file they name)
-        -- are not offered by /rules.
+        -- Instructions that go along with every chat. CodeCompanion's own groups (~/.claude/CLAUDE.md, the
+        -- project's CLAUDE.md/AGENTS.md/.cursorrules/...) are written for agents with large contexts, fill the
+        -- local model's 8k before the conversation starts and can pull in any file they name: they are not
+        -- attached, and /rules does not offer them. A chat gets the group of the model it talks to
+        -- (lua/user/ai/chat.lua, `rules_group`: asked for each new chat): ai-rules-local.md (keep it short) or
+        -- ai-rules-cloud.md in ~/.config/nvim, and .nvim-ai.md in the project's root (the focused window's
+        -- directory when the chat opens) once you have approved what it says (<Leader>AS opens them, and
+        -- approves: a repository can bring one along).
         rules = {
           editor_local = {
             description = "Short instructions for the local model (ai-rules-local.md, .nvim-ai.md)",
@@ -384,7 +355,6 @@ return {
             show_presets = false,
           },
         },
-        prompt_library = prompt_library,
         -- Skills (`/skills`) from your own directories only. CodeCompanion also offers those a project brings
         -- (.claude/skills, .codecompanion/skills), ahead of yours of the same name: picking one gives the chat
         -- tools and the project's instructions, which is what .nvim-ai.md needs your approval for.

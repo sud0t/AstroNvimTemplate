@@ -1,5 +1,4 @@
--- <Leader>Ai: prompt the AI (the provider chosen with <Leader>As: the local model, Claude or another provider's
--- model) from inside a buffer.
+-- <Leader>Ai: prompt the AI chosen with <Leader>As from inside a buffer.
 --   Normal mode: asks for an instruction ("a function that parses an ISO date") and writes the answer below the
 --   cursor line (in its place when the line is empty).
 --   Visual mode: the instruction is about the selected lines ("handle the empty list", "translate to German"),
@@ -9,11 +8,13 @@
 -- The model sees the file around the cursor, so it can use what is defined there.
 local M = {}
 
--- How much of the file goes along. The local model has an 8k context (~3 characters per token of code); the
--- providers' models (`claude`: Claude and every other provider) take the whole file in practice.
+local stream = require "user.ai.stream"
+
+-- How much of the file goes along, in characters. The local model has an 8k context (~3 characters per token
+-- of code); the providers' models take the whole file in practice.
 local limits = {
   ollama = { before = 9000, after = 3000, selection = 8000, answer = 1024 },
-  claude = { before = 150000, after = 50000, selection = 150000, answer = 16000 },
+  remote = { before = 150000, after = 50000, selection = 150000, answer = 16000 },
 }
 
 local system_prompt = [[
@@ -31,7 +32,7 @@ local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, 
 
 --- The text to put into the buffer out of an answer (also a partial one): what is inside its code block.
 local function extract(text)
-  text = text:gsub("<think>.-</think>", ""):gsub("\r", "")
+  text = text:gsub("\r", "")
   local lines = vim.split(text, "\n", { plain = true })
   local open
   for i, line in ipairs(lines) do
@@ -101,7 +102,7 @@ local function block(ft, text) return ("`````%s\n%s\n`````"):format(ft, text) en
 --- Start writing. `first`, `last`: the selected lines (0-based, inclusive), or nil to insert at the cursor line.
 local function start(bufnr, instruction, first, last, cursor_row)
   local ai = require "user.ai"
-  local limit = ai.is_local() and limits.ollama or limits.claude
+  local limit = ai.is_local() and limits.ollama or limits.remote
   local max_before, max_after, max_selection = limit.before, limit.after, limit.selection
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local ft = vim.bo[bufnr].filetype
@@ -114,7 +115,7 @@ local function start(bufnr, instruction, first, last, cursor_row)
     local selection = join(first + 1, last + 1)
     if #selection > max_selection then
       return notify(
-        ("The selection is too long for the local model (%d characters)"):format(#selection),
+        ("The selection is too long for %s (%d characters)"):format(ai.label(), #selection),
         vim.log.levels.WARN
       )
     end
@@ -161,14 +162,9 @@ local function start(bufnr, instruction, first, last, cursor_row)
     system = system_prompt,
     messages = { { role = "user", content = table.concat(parts, "\n") } },
     max_tokens = limit.answer,
-    ollama = { options = { num_ctx = 8192, temperature = 0.2 } },
+    ollama = { options = { num_ctx = require("user.ai.ollama").context, temperature = 0.2 } },
   }
-  local is_local = ai.is_local()
-  local function release_gpu()
-    if is_local then require("user.ai.ollama").unload_spilled(ai.local_model()) end
-  end
 
-  local stream = require "user.ai.stream"
   local region = stream.region(bufnr, region_first, region_last)
   local written = false
   local function show(text)
@@ -182,7 +178,6 @@ local function start(bufnr, instruction, first, last, cursor_row)
   notify(("Writing with %s... (<Leader>Ai cancels)"):format(ai.label()))
   running[bufnr] = ai.chat(request, show, function(answer, info)
     running[bufnr] = nil
-    release_gpu()
     if info.error then
       region:release()
       return notify("Request failed: " .. info.error, vim.log.levels.ERROR)
@@ -212,14 +207,7 @@ function M.run()
   end
   if not vim.bo[bufnr].modifiable then return notify("Buffer is not modifiable", vim.log.levels.WARN) end
 
-  local first, last
-  if vim.fn.mode():match "^[vV\22]" then
-    first, last = vim.fn.line "v" - 1, vim.fn.line "." - 1
-    if first > last then
-      first, last = last, first
-    end
-    vim.cmd.normal { "\27", bang = true }
-  end
+  local first, last = stream.selection()
   local cursor_row = vim.api.nvim_win_get_cursor(0)[1] - 1
 
   vim.ui.input({ prompt = first and "AI, about the selection: " or "AI, write here: " }, function(instruction)
@@ -229,7 +217,5 @@ function M.run()
     start(bufnr, instruction, first, last, cursor_row)
   end)
 end
-
-M._extract, M._reindent = extract, reindent -- for tests
 
 return M

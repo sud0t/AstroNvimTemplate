@@ -1,15 +1,12 @@
--- Rust overrides on top of the AstroCommunity rust pack (community.lua)
-
--- Debugging goes through rustaceanvim rather than a hand-written nvim-dap configuration: `:RustLsp debuggables`
--- asks rust-analyzer for the cargo targets of the workspace (binaries, tests, examples), builds the chosen one
--- with `cargo build --message-format=json` and launches the executable named in the build output. The mappings
--- below put that behind the usual debugger keys, so nothing has to be typed.
+-- Rust, on top of the AstroCommunity rust pack. Debugging goes through rustaceanvim: `:RustLsp debuggables`
+-- asks rust-analyzer for the workspace's cargo targets, builds the chosen one and launches it. The mappings
+-- put that behind the usual debugger keys.
 
 ---@type rustaceanvim.RACargoRunnableArgs?
 local last_target
 local tracking = false
--- `:RustLsp debuggables!` would relaunch the last target, but with its errors muted (a failed build just does
--- nothing). Remember the target here instead and relaunch it with errors shown.
+-- `:RustLsp debuggables!` relaunches the last target with its errors muted (a failed build does nothing):
+-- the target is remembered here and relaunched with errors shown.
 local function track_last_target()
   if tracking then return end
   tracking = true
@@ -45,6 +42,16 @@ end
 
 local function is_rust_analyzer(client) return client.name == "rust-analyzer" end
 
+--- Makes every mapping in `maps` exist only in the buffers of the clients `cond` accepts.
+local function only_for(cond, maps)
+  for _, mode_maps in pairs(maps) do
+    for _, map in pairs(mode_maps) do
+      map.cond = cond
+    end
+  end
+  return maps
+end
+
 -- `:RustLsp <cmd>`; a table adds arguments / bang: rust_lsp { "runnables", bang = true } re-runs the last one
 local function rust_lsp(cmd)
   return function() vim.cmd.RustLsp(cmd) end
@@ -52,16 +59,16 @@ end
 
 local warned_missing_component = false -- rustaceanvim resolves the server command more than once per start
 
--- rust-analyzer asks for a codelens refresh while it is still indexing a workspace, and answers the
--- `codeLens/resolve` requests Neovim then sends for the "N references" / "N implementations" lenses with
--- "content modified" once indexing finishes. Neovim 0.12 does not retry a failed resolve, so those lenses stay as
--- the blank placeholder lines it draws above the item until the next request (an edit, a reload, or the server
--- asking again). Re-request once the loading phases (`rustAnalyzer/...` progress tokens; flycheck runs are
--- `rust-analyzer/flycheck/...`) have been quiet for a moment, through the same handler the server's request uses.
+-- rust-analyzer answers codeLens/resolve with "content modified" while it indexes, and Neovim 0.12 does not
+-- retry: the lenses stay blank. Ask again once its `rustAnalyzer/*` progress has been quiet for 500 ms.
 local refresh_generation = {} ---@type table<integer, integer> client id -> last scheduled refresh
 local function refresh_codelens_after_indexing(ev)
   local params = ev.data.params
-  if params.value.kind ~= "end" or type(params.token) ~= "string" or not vim.startswith(params.token, "rustAnalyzer/") then
+  if
+    params.value.kind ~= "end"
+    or type(params.token) ~= "string"
+    or not vim.startswith(params.token, "rustAnalyzer/")
+  then
     return
   end
   local client = vim.lsp.get_client_by_id(ev.data.client_id)
@@ -97,22 +104,19 @@ return {
   },
   {
     "mrcjkb/rustaceanvim",
-    -- rustaceanvim starts rust-analyzer from its ftplugin, on the FileType event, which for the first file of a
-    -- session comes before `User AstroFile` loads AstroLSP. rust-analyzer would then start with the plain
-    -- nvim-lspconfig config: no clippy, no `target/` exclusion and none of the capabilities the LSP packs add (blink.cmp snippets).
-    -- Loading AstroLSP first registers its `vim.lsp.config` entries before the server starts.
+    -- rustaceanvim starts rust-analyzer from its ftplugin, which for the first file of a session runs before
+    -- `User AstroFile` loads AstroLSP: the server would start without AstroLSP's `vim.lsp.config` entries
+    -- (clippy, the `target/` exclusion, blink.cmp's capabilities). As a dependency, AstroLSP is set up first.
     dependencies = { "AstroNvim/astrolsp" },
     -- the pack's `config` already writes these opts into `vim.g.rustaceanvim`
     opts = function(_, opts)
       opts.server = opts.server or {}
-      -- use the rust-analyzer that matches the active rustup toolchain; a project pinned to a toolchain without the
-      -- component (rust-toolchain.toml) falls back to the stable one, since the bare `rust-analyzer` proxy would
-      -- only print "Unknown binary 'rust-analyzer' in official toolchain" and no server would start
+      -- The rust-analyzer of the active rustup toolchain, or of stable when that one lacks the component: the
+      -- bare `rust-analyzer` proxy would only print "Unknown binary 'rust-analyzer' in official toolchain".
       opts.server.cmd = function()
         if vim.fn.executable "rustup" == 0 then return { "rust-analyzer" } end -- whatever is on PATH
-        -- rustup picks the toolchain (rust-toolchain.toml, directory overrides) from the directory it runs in:
-        -- ask from the file's directory, Neovim's working directory may be outside the project. This runs
-        -- while the server is started for the current buffer (rustaceanvim's ftplugin).
+        -- rustup picks the toolchain from the directory it runs in: ask from the file's directory (the current
+        -- buffer is the one the server starts for), since Neovim's working directory may be outside the project
         local dir = vim.fs.dirname(vim.api.nvim_buf_get_name(0))
         local cwd = dir and vim.fn.isdirectory(dir) == 1 and dir or nil
         for _, toolchain in ipairs { {}, { "--toolchain", "stable" } } do
@@ -136,11 +140,9 @@ return {
       end
 
       opts.dap = require("astrocore").extend_tbl(opts.dap, {
-        -- The pack passes `--liblldb $MASON/share/lldb/lib/liblldb.so`, a path Mason 2 no longer creates
-        -- (it is `$MASON/opt/lldb` now), and codelldb panics on start when it gets a missing library. codelldb
-        -- finds its bundled liblldb next to its own binary, so no path is needed. Sessions actually run through
-        -- nvim-dap's `codelldb` adapter registered by mason-nvim-dap (plugins/dap.lua); rustaceanvim only uses
-        -- this one to know it's talking to codelldb (source maps, library paths), or if that adapter is missing.
+        -- The pack's --liblldb path ($MASON/share/lldb) is gone in Mason 2 and codelldb panics on a missing
+        -- library; it finds its bundled liblldb by itself. rustaceanvim only reads this adapter to learn that it
+        -- talks to codelldb: sessions run through mason-nvim-dap's `codelldb` adapter (plugins/dap.lua).
         adapter = function()
           local codelldb = vim.fn.exepath "codelldb"
           if codelldb == "" then return false end
@@ -151,19 +153,14 @@ return {
             executable = { command = codelldb, args = { "--port", "${port}" } },
           }
         end,
-        -- rustaceanvim loads the toolchain's LLDB type formatters by passing every line of
-        -- `<sysroot>/lib/rustlib/etc/lldb_commands` as an init command; the blank lines in that file (Rust 1.9x)
-        -- make codelldb abort the launch with "error: empty command". codelldb already loads the same formatters
-        -- itself when the configuration says `sourceLanguages = { "rust" }`, so this is redundant anyway.
+        -- rustaceanvim passes each line of the toolchain's `lldb_commands` as an init command; its blank lines
+        -- (Rust 1.9x) abort the launch with "error: empty command". codelldb loads those formatters itself.
         load_rust_types = false,
-        -- otherwise rustaceanvim runs `cargo build` for every target as soon as rust-analyzer attaches (loading
-        -- nvim-dap and its UI along the way) just to pre-fill `:DapContinue`; the mappings build on demand instead
+        -- otherwise rustaceanvim runs `cargo build` for every target when rust-analyzer attaches, loading
+        -- nvim-dap on the way, to pre-fill `:DapContinue`; the mappings build on demand
         autoload_configurations = false,
-        -- rustaceanvim's default configuration plus the debug console: like the C/C++ configurations in
-        -- plugins/dap.lua, print to the REPL tab of the debug window, since codelldb's terminal loses the output of
-        -- programs that exit right away. For a program that reads stdin, `:DapContinue` has the "(terminal, for
-        -- input)" configurations with a path prompt (target/debug/<name>). Note: setting this skips
-        -- `.vscode/launch.json`.
+        -- rustaceanvim's default plus the debug console: codelldb's terminal loses the output of a program that
+        -- exits at once (plugins/dap.lua). Setting this skips .vscode/launch.json.
         configuration = {
           name = "Rust (cargo)",
           type = "codelldb",
@@ -182,51 +179,48 @@ return {
     opts = {
       config = {
         rust_analyzer = {
-          -- nvim-lspconfig's rust_analyzer entry (which rustaceanvim merges into its client config) uses this hook
-          -- to replace the handler for the "Run" codelens with one that runs cargo synchronously, blocking Neovim
-          -- until the program exits, and then shows its stdout as a notification. That overrides rustaceanvim's
-          -- handler, which runs it in a terminal split like `:RustLsp runnables`. Keep only the hook's other job.
+          -- nvim-lspconfig's hook, which rustaceanvim merges in, also swaps the "Run" codelens handler for one
+          -- that blocks Neovim until the program exits (rustaceanvim's runs a terminal split): keep its other job.
           before_init = function(init_params, config)
             local settings = config.settings and config.settings["rust-analyzer"]
             if settings then init_params.initializationOptions = settings end
           end,
         },
       },
-      mappings = {
+      mappings = only_for(is_rust_analyzer, {
         n = {
-          ["<Leader>dc"] = { continue, desc = "Start/Continue (F5)", cond = is_rust_analyzer },
-          ["<F5>"] = { continue, desc = "Debugger: Start", cond = is_rust_analyzer },
-          ["<Leader>dd"] = { debuggables, desc = "Debug cargo target", cond = is_rust_analyzer },
-          ["<Leader>dD"] = { debug_at_cursor, desc = "Debug target at cursor", cond = is_rust_analyzer },
-          ["<Leader>dl"] = { debug_last, desc = "Debug last cargo target", cond = is_rust_analyzer },
+          ["<Leader>dc"] = { continue, desc = "Start/Continue (F5)" },
+          ["<F5>"] = { continue, desc = "Debugger: Start" },
+          ["<Leader>dd"] = { debuggables, desc = "Debug cargo target" },
+          ["<Leader>dD"] = { debug_at_cursor, desc = "Debug target at cursor" },
+          ["<Leader>dl"] = { debug_last, desc = "Debug last cargo target" },
 
-          -- rustaceanvim's :RustLsp commands, only in rust-analyzer buffers (AstroNvim's "Rename file" on
-          -- <Leader>R is dropped in plugins/astrocore.lua)
-          ["<Leader>R"] = { desc = "Rust", cond = is_rust_analyzer },
-          ["<Leader>Rr"] = { rust_lsp "runnables", desc = "Runnables (cargo run/test/bench picker)", cond = is_rust_analyzer },
-          ["<Leader>RR"] = { rust_lsp { "runnables", bang = true }, desc = "Re-run last runnable", cond = is_rust_analyzer },
-          ["<Leader>Rt"] = { rust_lsp "testables", desc = "Testables (test picker)", cond = is_rust_analyzer },
-          ["<Leader>RT"] = { rust_lsp { "testables", bang = true }, desc = "Re-run last test", cond = is_rust_analyzer },
-          ["<Leader>Re"] = { rust_lsp "explainError", desc = "Explain next error (rustc --explain)", cond = is_rust_analyzer },
-          ["<Leader>Rd"] = { rust_lsp "renderDiagnostic", desc = "Render next diagnostic (cargo style)", cond = is_rust_analyzer },
-          ["<Leader>Rf"] = { rust_lsp { "flyCheck", "run" }, desc = "Check now (clippy without saving)", cond = is_rust_analyzer },
-          ["<Leader>Rh"] = { rust_lsp { "hover", "actions" }, desc = "Hover with actions", cond = is_rust_analyzer },
-          ["<Leader>Rm"] = { rust_lsp "expandMacro", desc = "Expand macro", cond = is_rust_analyzer },
-          ["<Leader>Ro"] = { rust_lsp "openDocs", desc = "Open docs.rs for symbol", cond = is_rust_analyzer },
-          ["<Leader>Rc"] = { rust_lsp "openCargo", desc = "Open Cargo.toml", cond = is_rust_analyzer },
-          ["<Leader>Rp"] = { rust_lsp "parentModule", desc = "Parent module", cond = is_rust_analyzer },
-          ["<Leader>Rs"] = { rust_lsp "ssr", desc = "Structural search replace", cond = is_rust_analyzer },
-          ["<Leader>RJ"] = { rust_lsp "joinLines", desc = "Join lines", cond = is_rust_analyzer },
-          ["<Leader>Rk"] = { rust_lsp { "moveItem", "up" }, desc = "Move item up", cond = is_rust_analyzer },
-          ["<Leader>Rj"] = { rust_lsp { "moveItem", "down" }, desc = "Move item down", cond = is_rust_analyzer },
+          -- (AstroNvim's "Rename file" on <Leader>R is dropped in plugins/astrocore.lua)
+          ["<Leader>R"] = { desc = "Rust" },
+          ["<Leader>Rr"] = { rust_lsp "runnables", desc = "Runnables (cargo run/test/bench picker)" },
+          ["<Leader>RR"] = { rust_lsp { "runnables", bang = true }, desc = "Re-run last runnable" },
+          ["<Leader>Rt"] = { rust_lsp "testables", desc = "Testables (test picker)" },
+          ["<Leader>RT"] = { rust_lsp { "testables", bang = true }, desc = "Re-run last test" },
+          ["<Leader>Re"] = { rust_lsp "explainError", desc = "Explain next error (rustc --explain)" },
+          ["<Leader>Rd"] = { rust_lsp "renderDiagnostic", desc = "Render next diagnostic (cargo style)" },
+          ["<Leader>Rf"] = { rust_lsp { "flyCheck", "run" }, desc = "Check now (clippy without saving)" },
+          ["<Leader>Rh"] = { rust_lsp { "hover", "actions" }, desc = "Hover with actions" },
+          ["<Leader>Rm"] = { rust_lsp "expandMacro", desc = "Expand macro" },
+          ["<Leader>Ro"] = { rust_lsp "openDocs", desc = "Open docs.rs for symbol" },
+          ["<Leader>Rc"] = { rust_lsp "openCargo", desc = "Open Cargo.toml" },
+          ["<Leader>Rp"] = { rust_lsp "parentModule", desc = "Parent module" },
+          ["<Leader>Rs"] = { rust_lsp "ssr", desc = "Structural search replace" },
+          ["<Leader>RJ"] = { rust_lsp "joinLines", desc = "Join lines" },
+          ["<Leader>Rk"] = { rust_lsp { "moveItem", "up" }, desc = "Move item up" },
+          ["<Leader>Rj"] = { rust_lsp { "moveItem", "down" }, desc = "Move item down" },
         },
         x = {
-          ["<Leader>R"] = { desc = "Rust", cond = is_rust_analyzer },
+          ["<Leader>R"] = { desc = "Rust" },
           -- `:` from visual mode fills in the '<,'> range, which these commands use
-          ["<Leader>RJ"] = { ":RustLsp joinLines<CR>", desc = "Join lines", cond = is_rust_analyzer },
-          ["<Leader>Rs"] = { ":RustLsp ssr<CR>", desc = "Structural search replace", cond = is_rust_analyzer },
+          ["<Leader>RJ"] = { ":RustLsp joinLines<CR>", desc = "Join lines" },
+          ["<Leader>Rs"] = { ":RustLsp ssr<CR>", desc = "Structural search replace" },
         },
-      },
+      }),
     },
   },
 }

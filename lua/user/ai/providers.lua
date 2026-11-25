@@ -1,10 +1,11 @@
--- The providers besides Ollama and Claude. Each is reached with an API key and speaks OpenAI's chat-completions
--- protocol: lua/user/ai/openai.lua sends the editor's AI actions to `url`, the CodeCompanion adapter named in
--- `chat` runs the chat. <Leader>As, "Set up provider...", connects one: the key is checked with the provider,
--- stored in the system keyring, and then a model is chosen.
--- To add one: an entry here and its name in M.order; a deny for its key variables in srt-ai.json (the chat's
--- commands must not see keys); its adapter in plugins/codecompanion.lua, with the adapter's server-side tools
--- switched off there and in `locked_down()` (they run without the sandbox and without asking).
+-- The providers besides Ollama and Claude. Each takes an API key and speaks OpenAI's chat-completions protocol:
+-- lua/user/ai/openai.lua sends the AI actions to `url`, the CodeCompanion adapter named in `chat` runs the
+-- chat. <Leader>As, "Set up provider...", checks a key with the provider and stores it in the system keyring.
+-- To add one: an entry here and its name in M.order; its adapter in plugins/codecompanion.lua, with the
+-- adapter's server-side tools switched off there and in `locked_down()` (they run without the sandbox and
+-- without asking); and its key variables where a chat's programs must not see them: the deny list of
+-- srt-ai.json, `claude_code.env` in plugins/codecompanion.lua and `not_passed` in lua/user/ai/claude_code.lua
+-- (tests/ai_provider.lua fails for a variable that is missing in one, and has them in `key_vars`).
 local M = {}
 
 -- the order they are listed in
@@ -20,8 +21,8 @@ M.order = { "openai", "gemini", "openrouter" }
 -- chat        the CodeCompanion adapter for the chat
 -- default     the model used until one is chosen
 -- models      the ones offered (ids as on the providers' model pages in November 2026); any other id can be
---             typed in ("Other..."). `body`: request fields for this model, here to make it think only
---             briefly before a short answer. A typed id gets none: not every model accepts every field.
+--             typed in. `body`: request fields that make this model think only briefly; a typed id gets
+--             none, as not every model accepts every field.
 M.list = {
   openai = {
     name = "OpenAI",

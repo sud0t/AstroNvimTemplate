@@ -1,76 +1,19 @@
--- What the AI features share to show an answer while it is being written, token by token:
---   M.chat     a streaming request to Ollama's chat endpoint
---   M.run      a command whose output is the answer as it grows (the other providers' backends)
---   M.region   a range of lines in a buffer that is rewritten as the answer grows (one undo step in the end)
---   M.float    a small window in the corner showing the answer live, for answers that are not written
---              into the buffer as they are (the review: its fixes are applied once the answer is complete)
+-- What the AI actions share to send a request and to show its answer while it is being written:
+--   M.run        a command whose output is the answer as it grows (every backend runs on it)
+--   M.decode     JSON text as a table: a line of an answer, an error's body
+--   M.post       a streaming request to an API that takes a key; M.get asks such an API a question
+--   M.selection  the rows selected in visual mode, for an action that takes a selection
+--   M.region     lines of a buffer that are rewritten as the answer grows (one undo step in the end)
+--   M.float      a corner window showing the answer live, for answers that are not written into the buffer
 local M = {}
 
-local url = "http://localhost:11434/api/chat"
-
---- Send `request` (an Ollama /api/chat body) and stream the answer.
---- `on_text(text)` gets the whole answer so far, each time it has grown; `on_done(text, info)` is called once at
---- the end, with `info.error` (a string, when the request failed) and `info.done_reason`. Both run on the main
---- loop. Returns a handle: `handle.cancel()` stops the request, and no callback runs after it.
-function M.chat(request, on_text, on_done)
-  request = vim.tbl_extend("force", request, { stream = true })
-  local text, pending, info = "", "", {}
-  local cancelled, queued = false, false
-
-  local function take(line)
-    if line == "" then return end
-    local ok, data = pcall(vim.json.decode, line)
-    if not ok or type(data) ~= "table" then return end
-    if data.error then info.error = tostring(data.error) end
-    if data.done_reason then info.done_reason = data.done_reason end
-    local piece = vim.tbl_get(data, "message", "content")
-    if type(piece) == "string" and piece ~= "" then
-      text = text .. piece
-      if not queued then
-        queued = true
-        vim.schedule(function()
-          queued = false
-          if not cancelled then on_text(text) end
-        end)
-      end
-    end
-  end
-
-  local job = vim.system({ "curl", "-sN", "--max-time", "600", url, "-d", "@-" }, {
-    stdin = vim.json.encode(request),
-    text = true,
-    stdout = function(_, chunk)
-      if not chunk then return end
-      pending = pending .. chunk
-      while true do
-        local nl = pending:find("\n", 1, true)
-        if not nl then break end
-        take(pending:sub(1, nl - 1))
-        pending = pending:sub(nl + 1)
-      end
-    end,
-  }, function(res)
-    take(pending)
-    vim.schedule(function()
-      if cancelled then return end
-      if not info.error and res.code ~= 0 then info.error = "no answer from Ollama (is it running?)" end
-      on_done(text, info)
-    end)
-  end)
-
-  return {
-    cancel = function()
-      cancelled = true
-      job:kill "sigterm"
-    end,
-  }
-end
-
---- Run `cmd` (with `opts` for vim.system: stdin, cwd) and hand every complete line of its output to
---- `take(state, line)`: `state.add(piece)` appends to the answer, `state.info` is what `on_done` gets with it.
---- `finish(state, res)` decides what the end of the process means. `on_text`, `on_done` and the handle are as
---- in M.chat. `opts.cleanup()` runs when the process has ended, also after a cancel (which skips `finish`).
---- What the backends that are not Ollama share (lua/user/ai/claude.lua, lua/user/ai/openai.lua).
+--- Run `cmd` (`opts` for vim.system: stdin, cwd) and hand every line of its output to `take(state, line)`:
+--- `state.add(piece)` appends to the answer, `state.fail(message)` reports an error (the first one stands).
+--- `finish(state, res)` decides what the end of the process means. `opts.cleanup()` runs at that end too,
+--- also after a cancel, which skips `finish`.
+--- `on_text(text)` gets the whole answer each time it has grown; `on_done(text, info)` runs once, with
+--- `info.error` (a string, when the request failed) and `info.done_reason` ("length": cut off). Both run on
+--- the main loop, and neither after `cancel()` of the handle. Raises when `cmd` cannot be started.
 function M.run(cmd, opts, take, on_text, finish, on_done)
   local state = { text = "", info = {} }
   local pending, cancelled, queued = "", false, false
@@ -85,6 +28,10 @@ function M.run(cmd, opts, take, on_text, finish, on_done)
       queued = false
       if not cancelled then on_text(state.text) end
     end)
+  end
+
+  function state.fail(message)
+    if not state.info.error then state.info.error = message end
   end
 
   opts.text = true
@@ -108,7 +55,7 @@ function M.run(cmd, opts, take, on_text, finish, on_done)
     end)
   end)
   if not started then
-    -- (the program is not installed: nothing ran, so nothing will clean up later)
+    -- nothing ran, so nothing will clean up later
     if cleanup then pcall(cleanup) end
     error(job, 0)
   end
@@ -120,11 +67,107 @@ function M.run(cmd, opts, take, on_text, finish, on_done)
   }
 end
 
---- A line of JSON as a table, or nil.
-function M.decode(line)
-  if line == "" then return end
-  local ok, data = pcall(vim.json.decode, line)
+--- JSON text as a table, or nil.
+function M.decode(text)
+  if text == "" then return end
+  local ok, data = pcall(vim.json.decode, text)
   if ok and type(data) == "table" then return data end
+end
+
+------------------------------------------------------------------------------------------- APIs with a key
+
+-- An `api` is what a provider's module says about its API: `name` (as error messages call it), `auth` (the
+-- header that carries the key, %s in its place), `headers` (the others, optional) and `error_message(data)`
+-- (the message in a decoded error body, or nil).
+
+--- curl's options for a request with `key`, for curl's stdin (`--config -`): there the key is in neither the
+--- process list nor a file. A key that providers.valid_key refuses could end the quoted value and add options.
+local function curl_config(api, key)
+  if not require("user.ai.providers").valid_key(key) then error("the API key cannot be one: nothing is sent", 0) end
+  local lines = { ('header = "%s"'):format(api.auth:format(key)), 'header = "content-type: application/json"' }
+  for _, header in ipairs(api.headers or {}) do
+    lines[#lines + 1] = ('header = "%s"'):format(header)
+  end
+  return table.concat(lines, "\n") .. "\n"
+end
+
+--- `text` without `key` in it: a server may repeat the key it was sent in its error message.
+local function without(key, text) return (text:gsub(vim.pesc(key), "***")) end
+
+--- POST `body` (a table) to `url` with `key` and read the answer as server-sent events: each `data:` line
+--- that is JSON goes to `event(state, data)` (`state` as in M.run), which sets `state.finished` when the
+--- provider ends the answer itself. Without that the answer does not count as whole: `info.error` is the
+--- first of an error in the stream, curl failing, an HTTP error or a body that is no stream, a stream that
+--- just ends. The text before it is still handed over. `on_text`, `on_done` and the handle as in M.run.
+function M.post(api, url, key, body, event, on_text, on_done)
+  local config = curl_config(api, key)
+  -- stdin carries curl's options, so the request goes through a private temporary file
+  local file = vim.fn.tempname()
+  vim.fn.writefile({ vim.json.encode(body) }, file)
+
+  local function take(state, line)
+    line = line:gsub("\r$", "")
+    -- (":" starts a comment, sent to keep the connection open; of an event's fields only `data` is the answer)
+    if line == "" or line:sub(1, 1) == ":" or line:find "^event:" or line:find "^id:" or line:find "^retry:" then
+      return
+    end
+    local data = line:match "^data:%s*(.*)$"
+    if not data then
+      -- not part of a stream: an error body (JSON, possibly over several lines), then the status from `-w`
+      state.rest = state.rest or {}
+      state.rest[#state.rest + 1] = line
+      return
+    end
+    data = M.decode(data) -- (nil for what is not JSON: OpenAI's closing `[DONE]`)
+    if data then event(state, data) end
+  end
+  local function finish(state, res)
+    local rest = state.rest or {}
+    local status = tonumber((rest[#rest] or ""):match "^%d%d%d$")
+    if status then rest[#rest] = nil end
+    if res.code ~= 0 then
+      state.fail(("no answer from %s (curl exit code %d)"):format(api.name, res.code))
+    elseif (status and status >= 400) or #rest > 0 then
+      local said = api.error_message(M.decode(table.concat(rest, "\n")))
+      state.fail(said or ("%s answered HTTP %s"):format(api.name, status or "with something else"))
+    elseif not state.finished then
+      state.fail(api.name .. " ended the answer before it was finished")
+    end
+  end
+  local cmd = { "curl", "-sN", "--max-time", "600", "-w", "\n%{http_code}", "--config", "-", url, "-d", "@" .. file }
+  local opts = { stdin = config, cleanup = function() vim.fn.delete(file) end }
+  return M.run(cmd, opts, take, on_text, finish, function(text, info)
+    if info.error then info.error = without(key, info.error) end
+    on_done(text, info)
+  end)
+end
+
+--- GET `url` with `key`, giving up after `seconds`: `on_result(body)` when the answer is 200, else
+--- `on_result(nil, message)`, on the main loop.
+function M.get(api, url, key, seconds, on_result)
+  local cmd = { "curl", "-s", "--max-time", tostring(seconds), "-w", "\n%{http_code}", "--config", "-", url }
+  vim.system(
+    cmd,
+    { text = true, stdin = curl_config(api, key) },
+    vim.schedule_wrap(function(res)
+      local body, status = (res.stdout or ""):match "^(.*)\n(%d+)%s*$"
+      if res.code ~= 0 or not status then
+        return on_result(nil, "could not reach " .. (url:match "^https?://([^/]+)" or url))
+      end
+      if status == "200" then return on_result(body) end
+      on_result(nil, without(key, api.error_message(M.decode(body)) or ("HTTP " .. status)))
+    end)
+  )
+end
+
+---------------------------------------------------------------------------------------------- showing it
+
+--- The rows selected in visual mode (first, last: 0-based, inclusive), which it leaves; nothing in other modes.
+function M.selection()
+  if not vim.fn.mode():match "^[vV\22]" then return end
+  local first, last = vim.fn.line "v" - 1, vim.fn.line "." - 1
+  vim.cmd.normal { "\27", bang = true }
+  return math.min(first, last), math.max(first, last)
 end
 
 local ns = vim.api.nvim_create_namespace "user_ai_stream"

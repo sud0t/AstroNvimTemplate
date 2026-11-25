@@ -1,11 +1,9 @@
--- The two ways the AI features reach Claude (lua/user/ai/init.lua picks one), both streaming the answer:
+-- The two ways the AI actions reach Claude (lua/user/ai/init.lua picks one), both streaming the answer:
 --   M.cli   through Claude Code (`claude -p`): uses the login of the `claude` command, so a Claude subscription
 --           and no API key. No tools, no project settings: it only answers the prompt it is given.
 --   M.api   the Anthropic API with an API key (billed per token).
--- A request is { system, messages = { { role, content }, ... }, max_tokens }. Both functions call
--- `on_text(text)` with the whole answer so far each time it has grown and `on_done(text, info)` once at the end
--- (`info.error`, `info.done_reason == "length"` when cut off), on the main loop, and return a handle with
--- `cancel()`, as M.chat in lua/user/ai/stream.lua does (`run` there is what the two share).
+-- A request is { system, messages = { { role, content }, ... }, max_tokens }; `on_text`, `on_done` and the
+-- handle both return are those of `run` in lua/user/ai/stream.lua.
 local M = {}
 
 -- `note` is shown next to the model in <Leader>As; `api_note` only where it is billed per token (the API key)
@@ -23,7 +21,7 @@ M.models = {
 -- the order they are listed in
 M.order = { "fable", "opus", "sonnet", "haiku" }
 
-local run, decode = require("user.ai.stream").run, require("user.ai.stream").decode
+local stream = require "user.ai.stream"
 
 ---------------------------------------------------------------------------------------------- Claude Code
 
@@ -62,7 +60,7 @@ function M.cli(request, model, on_text, on_done)
     "--no-session-persistence",
   }
   local function take(state, line)
-    local data = decode(line)
+    local data = stream.decode(line)
     if not data then return end
     if data.type == "stream_event" then
       local event = data.event or {}
@@ -82,23 +80,31 @@ function M.cli(request, model, on_text, on_done)
     local err = vim.trim(res.stderr or "")
     state.info.error = err ~= "" and err or ("Claude Code stopped without an answer (exit code %d)"):format(res.code)
   end
-  return run(cmd, { cwd = cwd, stdin = transcript(request.messages) }, take, on_text, finish, on_done)
+  return stream.run(cmd, { cwd = cwd, stdin = transcript(request.messages) }, take, on_text, finish, on_done)
 end
 
 ---------------------------------------------------------------------------------------------- Anthropic API
 
 -- ($ANTHROPIC_BASE_URL: the standard override, for a proxy or gateway)
 local api_url = (vim.env.ANTHROPIC_BASE_URL or "https://api.anthropic.com"):gsub("/+$", "") .. "/v1"
-local api_version = "2026-10-21"
 
---- curl options on stdin (`--config -`): the key is neither in the process list nor in a file
-local function curl_config(key, extra)
-  local lines = {
-    ('header = "x-api-key: %s"'):format(key),
-    ('header = "anthropic-version: %s"'):format(api_version),
-    'header = "content-type: application/json"',
+--- The message of an error, as a body or as an event of a stream: { type = "error", error = { type, message } }.
+local function error_message(data)
+  local err = type(data) == "table" and data.error or nil
+  if type(err) == "string" and err ~= "" then return err end
+  if type(err) ~= "table" then return end
+  local said = err.message or err.type
+  return type(said) == "string" and said ~= "" and said or nil
+end
+
+--- The API as stream.post and stream.get take one. `beta`: a beta feature the request uses.
+local function api(beta)
+  return {
+    name = "the Anthropic API",
+    auth = "x-api-key: %s",
+    headers = { "anthropic-version: 2026-10-21", beta and ("anthropic-beta: " .. beta) or nil },
+    error_message = error_message,
   }
-  return table.concat(vim.list_extend(lines, extra or {}), "\n") .. "\n"
 end
 
 function M.api(request, model, key, on_text, on_done)
@@ -110,53 +116,38 @@ function M.api(request, model, key, on_text, on_done)
     messages = request.messages,
     output_config = { effort = "low" }, -- short editing tasks: answer quickly
   }
-  local extra = {}
+  local beta
   if model ~= "haiku" then
     -- if a safety classifier declines the request, the API reruns it on a fallback model in the same call
+    -- (not for Haiku: the API has no fallback for it)
     body.fallbacks = "default"
-    extra[1] = 'header = "anthropic-beta: server-side-fallback-2026-07-01"'
+    beta = "server-side-fallback-2026-07-01"
   end
-  -- the request itself goes through a private temporary file (stdin carries the curl options)
-  local file = vim.fn.tempname()
-  vim.fn.writefile({ vim.json.encode(body) }, file)
 
-  local function fail(state, err)
-    local detail = type(err) == "table" and (err.message or err.type) or err
-    state.info.error = tostring(detail or "request failed")
-  end
-  local function take(state, line)
-    -- server-sent events: only the `data:` lines matter; an error before the stream starts is plain JSON
-    local data = decode(line:match "^data:%s*(.*)$" or (line:find "^{" and line) or "")
-    if not data then return end
-    if data.type == "content_block_delta" and data.delta and data.delta.type == "text_delta" then
-      state.add(data.delta.text or "")
-    elseif data.type == "message_delta" and data.delta then
-      local reason = data.delta.stop_reason
+  local function event(state, data)
+    -- (a `null` in the JSON is vim.NIL here, which is true and cannot be indexed)
+    local delta = type(data.delta) == "table" and data.delta or nil
+    if data.type == "content_block_delta" and delta and delta.type == "text_delta" then
+      state.add(delta.text or "")
+    elseif data.type == "message_delta" and delta then
+      local reason = delta.stop_reason
       if reason == "max_tokens" then state.info.done_reason = "length" end
-      if reason == "refusal" then fail(state, "Claude declined this request") end
+      if reason == "refusal" then state.fail "Claude declined this request" end
+    elseif data.type == "message_stop" then
+      state.finished = true
     elseif data.type == "error" then
-      fail(state, data.error)
+      state.fail(error_message(data) or "the Anthropic API reported an error")
     end
   end
-  local function finish(state, res)
-    if not state.info.error and res.code ~= 0 then
-      fail(state, "no answer from the Anthropic API (curl exit code " .. res.code .. ")")
-    end
-  end
-  local cmd = { "curl", "-sN", "--max-time", "600", "--config", "-", api_url .. "/messages", "-d", "@" .. file }
-  local opts = { stdin = curl_config(key, extra), cleanup = function() vim.fn.delete(file) end }
-  return run(cmd, opts, take, on_text, finish, on_done)
+  return stream.post(api(beta), api_url .. "/messages", key, body, event, on_text, on_done)
 end
 
 ---------------------------------------------------------------------------------------------- chat models
 
--- What CodeCompanion's `anthropic` adapter has to know about the models (plugins/codecompanion.lua). By itself
--- it asks the API with the key among curl's arguments, where every process on the machine can read it; here
--- the key goes in on stdin, and the answer is put into the adapter's form by CodeCompanion's own function.
--- A chat keeps the settings it was opened with, so the adapter asks once before the first chat and waits for
--- the answer (up to 3 seconds). When the API cannot be reached the adapter gets what is known here: enough
--- for a chat, with a length limit every model takes and without what depends on the API's answer (compacting
--- a long chat).
+-- Model metadata for CodeCompanion's `anthropic` adapter, fetched here because the adapter's own request
+-- puts the key among curl's arguments, where every process on the machine can read it (here it is on curl's
+-- stdin: lua/user/ai/stream.lua). Fetched once, waiting up to 3 seconds before the first chat; when the API
+-- cannot be reached the adapter gets the static list below (no compaction of long chats).
 local chat_models = { retry_at = 0 }
 -- (the address CodeCompanion's adapter sends the chat to: it does not follow $ANTHROPIC_BASE_URL)
 local chat_api = "https://api.anthropic.com/v1"
@@ -180,21 +171,21 @@ function M.chat_models(key, request)
     local ok, transform = pcall(require, "codecompanion.adapters.utils.models.transform")
     if ok and type(transform.from_anthropic) == "function" then
       chat_models.fetching = true
-      vim.system(
-        { "curl", "-s", "--max-time", "10", "--config", "-", chat_api .. "/models?limit=100" },
-        { text = true, stdin = curl_config(key) },
-        vim.schedule_wrap(function(res)
-          chat_models.fetching = false
-          chat_models.retry_at = vim.uv.now() + 60000
-          local data = res.code == 0 and decode(res.stdout or "") or nil
-          local choices = {}
-          for _, model in ipairs(data and type(data.data) == "table" and data.data or {}) do
-            local done, id, choice = pcall(transform.from_anthropic, model)
-            if done and type(id) == "string" then choices[id] = choice end
-          end
-          if next(choices) then chat_models.fetched = choices end
-        end)
-      )
+      local asked, why = pcall(stream.get, api(), chat_api .. "/models?limit=100", key, 10, function(body)
+        chat_models.fetching = false
+        chat_models.retry_at = vim.uv.now() + 60000
+        local data = stream.decode(body or "")
+        local choices = {}
+        for _, model in ipairs(data and type(data.data) == "table" and data.data or {}) do
+          local done, id, choice = pcall(transform.from_anthropic, model)
+          if done and type(id) == "string" then choices[id] = choice end
+        end
+        if next(choices) then chat_models.fetched = choices end
+      end)
+      if not asked then
+        chat_models.fetching = false -- (nothing was started: no answer will do it)
+        error(why, 0)
+      end
     end
   end
   if chat_models.fetching and request and request.async == false then
@@ -205,17 +196,7 @@ end
 
 --- Is `key` a working API key? `on_result(ok, message)` on the main loop. (Lists one model: free.)
 function M.verify_key(key, on_result)
-  vim.system(
-    { "curl", "-s", "--max-time", "20", "--config", "-", "-w", "\n%{http_code}", api_url .. "/models?limit=1" },
-    { text = true, stdin = curl_config(key) },
-    vim.schedule_wrap(function(res)
-      local body, status = (res.stdout or ""):match "^(.*)\n(%d+)%s*$"
-      if res.code ~= 0 or not status then return on_result(false, "could not reach api.anthropic.com") end
-      if status == "200" then return on_result(true) end
-      local data = decode(body) or {}
-      on_result(false, vim.tbl_get(data, "error", "message") or ("HTTP " .. status))
-    end)
-  )
+  stream.get(api(), api_url .. "/models?limit=1", key, 20, function(body, message) on_result(body ~= nil, message) end)
 end
 
 return M

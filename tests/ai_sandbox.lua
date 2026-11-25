@@ -1,7 +1,7 @@
--- Tests for the AI chat's tool sandbox (lua/user/ai/sandbox.lua, the fallback in lua/plugins/codecompanion.lua,
--- the prompt of lua/user/ai/commit.lua). Run them after changing any of those, and before keeping a
--- CodeCompanion update (lazy-lock.json): the sandbox wraps functions of the plugin that are not part of its API.
---   nvim --clean -i NONE -l ~/.config/nvim/tests/ai_sandbox.lua
+-- Tests for the AI chat's tool sandbox (lua/user/ai/sandbox/ and the fallback in lua/plugins/codecompanion.lua).
+-- Run them after changing either, and before keeping a CodeCompanion update (lazy-lock.json): the sandbox
+-- wraps functions of the plugin that are not part of its API.
+--   tests/run.sh ai_sandbox
 -- prints what failed and exits with 1, or "ok". Everything happens in a home directory of its own under
 -- $TMPDIR, with the real CodeCompanion and a stand-in for `srt`.
 -- What this cannot show is that srt itself enforces srt-ai.json. In a terminal, in a git project
@@ -15,6 +15,9 @@
 --   cd ~/.config/nvim && $S 'touch lua/zz.lua'                       fails (read-only)
 --   SRT_DEBUG=1 $S true 2>&1 | grep 'Skipping glob write pattern'    prints nothing
 local uv = vim.uv
+
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+local ok = harness.ok
 
 local repo = vim.fs.dirname(vim.fs.dirname(assert(uv.fs_realpath(debug.getinfo(1, "S").source:sub(2)))))
 local real_home = uv.os_homedir()
@@ -41,12 +44,6 @@ for _, name in ipairs { "codecompanion.nvim", "plenary.nvim", "astrocore" } do
 end
 
 vim.notify = function() end -- (the sandbox's warnings are part of what is tested here, not of the result)
-
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
 
 local function write(path, text)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
@@ -495,6 +492,7 @@ settings(function(s)
   table.insert(s.filesystem.denyRead, "private")
 end)
 path_case("denyRead pattern", "keys-1/a", false, "protected")
+path_case("a refusal by an entry says which file the entry is in", "keys-1/a", false, "in " .. sandbox.settings_file)
 path_case("denyRead relative entry", "private/notes", false, "protected")
 path_case("denyRead relative entry, write", "private/notes", true, "protected")
 settings()
@@ -1024,9 +1022,63 @@ tool_case("search with a protected path below", "grep_search", { query = "key" }
 settings(function(s) table.insert(s.filesystem.denyRead, "no-such-dir") end)
 tool_case("search with a protected path that is not there", "grep_search", { query = "key" }, true)
 settings()
+-- The sandbox lists what a text search would read with a ripgrep command of its own, made like the one
+-- grep_search runs. A flag that CodeCompanion adds can widen what a search reads (--hidden, --follow, -u):
+-- then this fails, and `secret_search` has to list the same before the flag is added here.
+local how_to_match =
+  { "--json", "--line-number", "--no-heading", "--with-filename", "--fixed-strings", "--ignore-case" }
+local grep_flags = vim.list_extend({ "--no-ignore", "--glob", "--max-count", "-e" }, how_to_match)
+local grep_source =
+  vim.api.nvim_get_runtime_file("lua/codecompanion/interactions/chat/tools/builtin/grep_search.lua", false)[1]
+local grep_text = table.concat(vim.fn.readfile(grep_source), "\n")
+local flags_seen, flags_new = 0, {}
+for flag in grep_text:gmatch [=[["'](%-[%w-]+)["']]=] do
+  flags_seen = flags_seen + 1
+  if not vim.list_contains(grep_flags, flag) then flags_new[#flags_new + 1] = flag end
+end
+ok(
+  "grep_search gives ripgrep the flags the sandbox knows, and no other",
+  flags_seen == #grep_flags and #flags_new == 0,
+  vim.inspect { seen = flags_seen, new = flags_new }
+)
 -- A text search says what is in the files it reads (a match or none), and a pattern takes in hidden files and
 -- the files git ignores: it does not run when a file named like a secret is among what it would read.
 if vim.fn.executable "rg" == 1 then
+  --- The part of a ripgrep command that says which files are read.
+  local function reads(command)
+    local kept, skip = {}, false
+    for _, arg in ipairs(command) do
+      if skip then
+        skip = false
+      elseif arg == "--max-count" or arg == "-e" then
+        skip = true
+      elseif arg ~= "--files" and not vim.list_contains(how_to_match, arg) then
+        kept[#kept + 1] = arg
+      end
+    end
+    return kept
+  end
+  local ignoring = vim.deepcopy(defaults)
+  ignoring.grep_search.opts.respect_gitignore = false
+  for name, case in pairs {
+    ["a search"] = { { query = "x" }, defaults },
+    ["a search with a pattern, of what git ignores too"] = { { query = "x", include_pattern = "src/**" }, ignoring },
+  } do
+    local system, ran = vim.system, {}
+    vim.system = function(command, ...)
+      ran[#ran + 1] = command
+      if command[2] == "--files" then return system(command, ...) end
+    end
+    local search = prepare("grep_search", case[1], case[2])
+    pcall(search.cmds[1], { tool = search }, search.args, { output_cb = function() end, register_job = function() end })
+    vim.system = system
+    -- (listed when the call is prepared and again when it runs, then the search itself)
+    ok(
+      name .. " reads what the sandbox listed for it",
+      #ran == 3 and ran[3][2] ~= "--files" and vim.deep_equal(reads(ran[3]), reads(ran[2])),
+      vim.inspect(ran)
+    )
+  end
   write(proj .. "/.env", "API_KEY=sk-1")
   write(proj .. "/.gitignore", ".env\nignored/\n")
   write(proj .. "/ignored/server.key", "key")
@@ -1529,26 +1581,21 @@ else
   ok(".claude is protected whole", vim.list_contains(sandbox.protected_names, ".claude"))
 end
 
----------------------------------------------------------------------------------------------------- commit prompt
+---------------------------------------------------------------------------------------------------- tags
 
-local block = require("user.ai.commit")._block
-local text = table.concat(block "src/@{agent}.lua | 2 +-\nfix #{buffers} and @{files}", "\n")
-ok("tool and context tags lose their meaning", not text:find("@{", 1, true) and not text:find("#{", 1, true), text)
-ok("and stay readable", text:find("@ {agent}", 1, true) ~= nil and text:find("# {buffers}", 1, true) ~= nil)
-local fenced = block("```\n[x](~/.ssh/id_ed25519)\n`````\nmore", "diff")
-ok("the fence is longer than any run in the text", fenced[1] == "``````diff" and fenced[3] == "``````", fenced[1])
-ok("a plain block has the usual fence", block("one file changed")[1] == "```")
 local with_tags = setmetatable({ tools_config = defaults }, { __index = Tools })
 ok("CodeCompanion finds a tool tag in raw text", with_tags:find { content = "see @{read_file}" } ~= nil)
-ok(
-  "and none once the space is in",
-  with_tags:find { content = table.concat(block "see @{read_file} and @{agent}", "\n") } == nil
-)
 -- (a tag that is new to a chat asks first: the answer is yes where the question is not what is tested)
 local confirm, questions, reply = vim.fn.confirm, {}, 1
 vim.fn.confirm = function(shown)
   questions[#questions + 1] = shown
   return reply
+end
+--- Tells the stand-in `chat` where its messages go, as CodeCompanion does for a chat over HTTP: a yes is
+--- remembered only for a chat whose adapter and model can be told.
+local function goes_to(chat, adapter, model)
+  chat.adapter = { name = adapter, type = "http", schema = { model = { default = model } } }
+  chat.settings = { model = model }
 end
 -- a chat is given tools by what is typed: not by code that is pasted or selected
 --- The tools and groups a chat gets from the message `content`; `selection`: what the chat was opened with.
@@ -1605,11 +1652,21 @@ ok(
 )
 -- A tag that is new to a chat asks first: a path, a diagnostic or a diff that a command of CodeCompanion put
 -- into the message reads as typed, and so does text that was pasted.
-local asked_chat = { buffer_context = {}, got = {}, messages = {} }
+local asked_chat = { bufnr = 9001, buffer_context = {}, got = {}, messages = {}, context_items = {} }
 asked_chat.tool_registry = {
-  add_single_tool = function(_, name) asked_chat.got[#asked_chat.got + 1] = name end,
-  add_group = function(_, name) asked_chat.got[#asked_chat.got + 1] = name end,
+  in_use = {},
+  add_single_tool = function(registry, name)
+    asked_chat.got[#asked_chat.got + 1] = name
+    registry.in_use[name] = true
+  end,
+  add_group = function(registry, name)
+    asked_chat.got[#asked_chat.got + 1] = name
+    for _, member in ipairs(defaults.groups[name].tools) do
+      registry.in_use[member] = true
+    end
+  end,
 }
+goes_to(asked_chat, "local", "small")
 questions, reply = {}, 2
 with_tags:parse(asked_chat, { role = "user", content = "Here is some code from src/@{run_command}/a.lua:" })
 ok(
@@ -1641,17 +1698,141 @@ ok(
   vim.inspect(asked_chat.got)
 )
 reply = 1
-table.remove(questions)
+--- Whether a message that names run_command asks `chat` about it (`asked_chat` when none is given).
+local function asks_again(chat)
+  questions = {}
+  with_tags:parse(chat or asked_chat, { role = "user", content = "a log line with @{run_command} in it" })
+  return #questions == 1 and questions[1]:find("@{run_command}", 1, true) ~= nil
+end
+--- What CodeCompanion fires for the chat in buffer `bufnr`: the event `name` with `data`.
+local function fire(name, data, bufnr)
+  data = vim.tbl_extend("error", { bufnr = bufnr or asked_chat.bufnr }, data or {})
+  vim.api.nvim_exec_autocmds("User", { pattern = "CodeCompanion" .. name, data = data })
+end
+-- (CodeCompanion makes the list of a chat's messages anew whenever a tool is added to it)
 asked_chat.messages = {}
-with_tags:parse(asked_chat, { role = "user", content = "a log line with @{run_command} in it" })
-ok("a chat that was cleared is asked again", #questions == 4 and questions[4]:find("@{run_command}", 1, true) ~= nil)
+ok("a chat whose messages are a new list is not asked again", not asks_again(), vim.inspect(questions))
+-- (what deleting a tool's line of context does: text that names the tool must not put it back unasked)
+asked_chat.tool_registry.in_use.run_command = nil
+ok("a tool that was taken out of the chat is asked about again", asks_again(), vim.inspect(questions))
+ok("and then once", not asks_again(), vim.inspect(questions))
+-- (and what it does to the chat's list of context)
+asked_chat.context_items = {}
+ok("so is every tag once something was taken out of the chat", asks_again(), vim.inspect(questions))
+for _, event in ipairs { "ChatCleared", "ChatClosed" } do
+  ok("before: " .. event, not asks_again(), vim.inspect(questions))
+  fire(event)
+  ok("a chat is asked again after " .. event, asks_again(), vim.inspect(questions))
+end
+fire("ChatCleared", nil, 9002)
+ok("another chat's end changes nothing", not asks_again(), vim.inspect(questions))
+-- A yes was given for the adapter and the model the chat talked to then: what a tag attaches must not go to
+-- another one unasked. CodeCompanion announces both, also when neither changed.
+local same_model = { name = "local", model = { name = "small" } }
+for name, announcement in pairs {
+  ["its adapter"] = { "ChatAdapter", { adapter = { name = "local" } } },
+  ["its adapter over HTTP, which comes with its model"] = { "ChatAdapter", { adapter = same_model } },
+  ["its model"] = { "ChatModel", { model = "small" } },
+  ["its model with its adapter"] = { "ChatModel", { adapter = same_model, model = "small" } },
+} do
+  fire(unpack(announcement))
+  ok("a chat is not asked again when CodeCompanion announces " .. name .. " again", not asks_again())
+end
+-- (announced and not read from the chat, which is where it was: a chat that moved and came back)
+for name, announcement in pairs {
+  ["another adapter"] = { "ChatAdapter", { adapter = { name = "provider" } } },
+  ["its adapter with another model"] = { "ChatAdapter", { adapter = { name = "local", model = { name = "large" } } } },
+  ["another model"] = { "ChatModel", { model = "large" } },
+  ["another model with its adapter"] = { "ChatModel", { adapter = same_model, model = "large" } },
+  ["its model with another adapter"] = { "ChatModel", { adapter = { name = "provider" }, model = "small" } },
+  ["no adapter"] = { "ChatAdapter" },
+  ["no model"] = { "ChatModel" },
+} do
+  ok("before: " .. name, not asks_again(), vim.inspect(questions))
+  fire(unpack(announcement))
+  ok("a chat is asked again once CodeCompanion announced " .. name, asks_again(), vim.inspect(questions))
+end
+fire("ChatModel", { model = "large" }, 9002)
+ok("what is announced for another chat changes nothing", not asks_again(), vim.inspect(questions))
+-- (and read from the chat: CodeCompanion announces no chat that g:codecompanion_adapter moved)
+goes_to(asked_chat, "provider", "small")
+ok("a chat with another adapter is asked again, announced or not", asks_again(), vim.inspect(questions))
+ok("once", not asks_again(), vim.inspect(questions))
+goes_to(asked_chat, "provider", "large")
+ok("so is one with another model", asks_again(), vim.inspect(questions))
+ok("once as well", not asks_again(), vim.inspect(questions))
+-- (it moves the chat when a message is submitted, after the tags of that message were read)
+vim.g.codecompanion_adapter = "local"
+ok("a chat that its next message moves to another adapter is asked every time", asks_again() and asks_again())
+vim.g.codecompanion_adapter = "provider"
+ok("one that it leaves where it is, is not", not asks_again(), vim.inspect(questions))
+vim.g.codecompanion_adapter = nil
+-- A chat with an agent (Claude Code) has its model from the agent, which can change it by itself. CodeCompanion
+-- announces it after every answer.
+local agent_chat = vim.deepcopy(asked_chat)
+agent_chat.bufnr, agent_chat.settings, agent_chat.adapter = 9005, nil, { name = "agent", type = "acp" }
+agent_chat.acp_connection = { model = "opus", get_models = function(self) return { currentModelId = self.model } end }
+ok("a chat with an agent is asked once", asks_again(agent_chat) and not asks_again(agent_chat))
+fire("ChatModel", { model = "opus" }, agent_chat.bufnr)
+ok("and not again when its model is announced after an answer", not asks_again(agent_chat), vim.inspect(questions))
+agent_chat.acp_connection.model = "haiku"
+ok("it is once the agent has another model, announced or not", asks_again(agent_chat), vim.inspect(questions))
+ok("once", not asks_again(agent_chat), vim.inspect(questions))
+fire("ChatModel", { model = "opus" }, agent_chat.bufnr)
+ok("and once an answer announced another one in between", asks_again(agent_chat), vim.inspect(questions))
+-- (an agent that offers no models: CodeCompanion calls its model "default", and announces none)
+agent_chat.acp_connection.get_models = function() return nil end
+ok("a chat whose agent names no model is asked once", asks_again(agent_chat) and not asks_again(agent_chat))
+agent_chat.acp_connection.get_models = function() return {} end
+ok("its agent may have a list of models without a current one", not asks_again(agent_chat), vim.inspect(questions))
+fire("ChatModel", { model = "opus" }, agent_chat.bufnr)
+ok("a model that is announced later ends that yes", asks_again(agent_chat), vim.inspect(questions))
 local group_name, group = next(defaults.groups)
+questions = {}
 with_tags:parse(asked_chat, { role = "user", content = ("use @{%s}"):format(group_name) })
 ok(
   "a group is shown with the tools in it",
-  #questions == 5 and questions[5]:find(("  @{%s}  (%s"):format(group_name, group.tools[1]), 1, true) ~= nil,
-  questions[5]
+  #questions == 1 and questions[1]:find(("  @{%s}  (%s"):format(group_name, group.tools[1]), 1, true) ~= nil,
+  questions[1]
 )
+with_tags:parse(asked_chat, { role = "user", content = ("@{%s} again"):format(group_name) })
+ok("a group the chat was given is not asked about again", #questions == 1, vim.inspect(questions))
+asked_chat.tool_registry.in_use[group.tools[#group.tools]] = nil
+with_tags:parse(asked_chat, { role = "user", content = ("@{%s} once more"):format(group_name) })
+ok("but it is once one of its tools was taken out of the chat", #questions == 2, vim.inspect(questions))
+-- a chat that cannot be told from another, or from itself with less in it, is asked every time
+for name, change in pairs {
+  ["no buffer number"] = function(chat) chat.bufnr = nil end,
+  ["a buffer number that is none"] = function(chat) chat.bufnr = "9001" end,
+  ["no list of context"] = function(chat)
+    chat.bufnr, chat.context_items = 9004, nil
+  end,
+  -- (nor one whose adapter or model cannot be told, from itself with another)
+  ["no adapter"] = function(chat) chat.adapter = nil end,
+  ["an adapter without a name"] = function(chat) chat.adapter.name = nil end,
+  ["an adapter that is neither over HTTP nor an agent"] = function(chat) chat.adapter.type = "cli" end,
+  ["no settings"] = function(chat) chat.settings = nil end,
+  ["settings that name another model than its adapter does"] = function(chat) chat.settings.model = "large" end,
+  ["an agent that is not connected"] = function(chat) chat.adapter.type = "acp" end,
+  ["an agent whose model is not a name"] = function(chat)
+    chat.adapter.type, chat.acp_connection = "acp", { get_models = function() return { currentModelId = 5 } end }
+  end,
+  ["an agent whose models are not a list"] = function(chat)
+    chat.adapter.type, chat.acp_connection = "acp", { get_models = function() return "opus" end }
+  end,
+  ["an agent whose model cannot be read"] = function(chat)
+    chat.adapter.type, chat.acp_connection = "acp", { get_models = function() error "another CodeCompanion" end }
+  end,
+} do
+  local nameless = vim.deepcopy(asked_chat)
+  nameless.bufnr = 9006
+  goes_to(nameless, "local", "small")
+  change(nameless)
+  questions = {}
+  with_tags:parse(nameless, { role = "user", content = "use @{read_file}" })
+  with_tags:parse(nameless, { role = "user", content = "use @{read_file}" })
+  ok("a chat with " .. name .. " is asked every time", #questions == 2, vim.inspect(questions))
+end
 questions = {}
 ok("another chat is asked on its own", given_by "use @{run_command}" == "run_command" and #questions == 1)
 local prefs = require "user.ai.settings"
@@ -1791,7 +1972,8 @@ local attach_context = sandbox._hooks.context_tags.wrap(function(_, _, message)
   attached_by[#attached_by + 1] = message.content
   return true
 end)
-local reader = { buffer_context = {}, messages = {} }
+local reader = { bufnr = 9003, buffer_context = {}, messages = {}, context_items = {} }
+goes_to(reader, "local", "small")
 questions, reply = {}, 2
 ok(
   "a context tag that is new to a chat asks, and a no attaches nothing",
@@ -1808,6 +1990,11 @@ ok(
 )
 ok(
   "and it is not asked about again",
+  attach_context(context, reader, { content = "and #{buffers} again" }) == true and #questions == 2
+)
+reader.messages = {}
+ok(
+  "nor when the chat's messages are a new list",
   attach_context(context, reader, { content = "and #{buffers} again" }) == true and #questions == 2
 )
 ok(
@@ -1838,10 +2025,17 @@ ok(
     and attached_by[#attached_by] == "#{buffers}",
   vim.inspect { questions[5], attached_by[#attached_by] }
 )
+-- (CodeCompanion makes the chat's list of context anew when a line of it is deleted)
+reader.context_items = {}
+reply = 1
+ok(
+  "what was attached is asked about again once something was taken out of the chat",
+  attach_context(context, reader, { content = "see #{buffers}" }) == true
+    and #questions == 6
+    and questions[6]:find("  #{buffers}\n", 1, true) ~= nil,
+  questions[6]
+)
 vim.fn.confirm = confirm
-local direct = block("git reset HEAD@{1} #{x}\n```", nil, true)
-ok("a message that goes to the model directly keeps the text as it is", direct[2] == "git reset HEAD@{1} #{x}\n```")
-ok("with the same fence", direct[1] == "````" and direct[3] == "````")
 
 ---------------------------------------------------------------------------------------------------- the plugin's options
 
@@ -1881,6 +2075,26 @@ local function claude_code_kept_out(opts)
   local fs = vim.tbl_get(adapter, "parameters", "clientCapabilities", "fs") or {}
   return fs.readTextFile == false and fs.writeTextFile == false and adapter.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS == "1"
 end
+--- Nor the providers' keys: every variable a provider takes its key from is empty for it (the list is
+--- written out in plugins/codecompanion.lua, which must not depend on lua/user/ai/providers.lua).
+local function keys_kept_from_claude_code(opts)
+  local env, providers, seen = opts.adapters.acp.claude_code().env, require "user.ai.providers", 0
+  for _, id in ipairs(providers.order) do
+    for _, name in ipairs(providers.list[id].env) do
+      seen = seen + 1
+      if type(env[name]) ~= "function" or env[name]() ~= "" then return false, name end
+    end
+  end
+  return seen > 0, seen
+end
+-- The Anthropic adapter looks its key up and asks the API for its models. It finds a key in the environment,
+-- before the keyring is asked, and its request is answered here.
+vim.env.ANTHROPIC_API_KEY = "sk-ant-not-a-key-of-anyone"
+local asked_for_models = 0
+require("user.ai.stream").get = function(_, _, _, _, on_result)
+  asked_for_models = asked_for_models + 1
+  on_result(nil, "a test asks no provider")
+end
 cd(proj)
 local opts = spec.opts(nil, {})
 ok("options: the sandbox is in place", sandbox.status().wrapped.tools == true)
@@ -1904,6 +2118,7 @@ local function no_redirects(o)
   return true
 end
 ok("options: no adapter follows a redirect", no_redirects(opts))
+ok("options: the Anthropic adapter asks for its models through lua/user/ai/stream.lua", asked_for_models > 0)
 ok("options: the adapters' server-side tools are off", server_tools_off(opts))
 ok(
   "options: skills come from your own directories only",
@@ -1911,10 +2126,23 @@ ok(
   vim.inspect(opts.skills)
 )
 ok("options: the Claude Code chat reads and writes by itself", claude_code_kept_out(opts))
+ok("options: and does not get the providers' keys", keys_kept_from_claude_code(opts))
 ok("options: <Leader>As moves the chat", vim.g.ai_chat_locked == nil)
 ok("options: CodeCompanion's own rule groups are not offered", opts.rules.opts.show_presets == false)
 ok("options: project rules by their one name", opts.rules.editor_local.files[2] == sandbox.project_rules)
 ok("options: rules follow the provider", type(opts.rules.opts.chat.autoload()) == "string")
+-- (the copies the local adapter falls back on when lua/user/ai/ollama.lua does not load)
+local ollama = require "user.ai.ollama"
+package.loaded["user.ai.ollama"] = nil
+package.preload["user.ai.ollama"] = function() error "boom" end
+local own = opts.adapters.http.ollama().schema
+package.preload["user.ai.ollama"] = nil
+package.loaded["user.ai.ollama"] = ollama
+ok(
+  "options: the local adapter's own copies of the model and its context size are the ones in use",
+  own.model.default == ollama.model and own.num_ctx.default == ollama.context,
+  vim.inspect { own.model.default, own.num_ctx.default }
+)
 
 local function locked_case(name, break_it, mend)
   break_it()
@@ -1937,8 +2165,8 @@ local function locked_case(name, break_it, mend)
     found and asked or choices
   )
   ok(name .. ": the Claude Code chat reads and writes by itself", claude_code_kept_out(locked))
+  ok(name .. ": and does not get the providers' keys", keys_kept_from_claude_code(locked))
   ok(name .. ": the local chat keeps its settings", locked.adapters.http.ollama().schema.num_ctx.default == 8192)
-  ok(name .. ": <Leader>Ac still has its chat", vim.tbl_get(locked, "prompt_library", "Commit message") ~= nil)
   ok(name .. ": <Leader>As leaves the chat local", vim.g.ai_chat_locked == true)
 end
 local real_install = sandbox.install
@@ -1963,8 +2191,6 @@ end, function() ai.chat_adapter = chat_adapter end)
 
 ok("options: and unlocked again once they work", spec.opts(nil, {}) ~= nil and vim.g.ai_chat_locked == nil)
 
--- a chat that is created after the sandbox went away (a plugin reload that brought another CodeCompanion):
--- the tools are taken away where they are
 spec.init()
 ok(
   "the files with a request's headers are cleared away after a request",
@@ -1994,6 +2220,8 @@ ok("and other files", uv.fs_stat(body) ~= nil)
 for _, path in ipairs { answer, awaited, in_use, body } do
   uv.fs_unlink(path)
 end
+-- a chat that is created after the sandbox went away (a plugin reload that brought another CodeCompanion):
+-- the tools are taken away where they are
 local live_tools = require("codecompanion.config").interactions.chat.tools
 local function live_off()
   for name, live_tool in pairs(live_tools) do
@@ -2015,11 +2243,4 @@ end
 
 vim.cmd.cd(vim.fn.fnameescape(repo))
 vim.fn.delete(base, "rf")
-if #failures > 0 then
-  print(("%d of %d checks failed:"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    print("  - " .. failure)
-  end
-  os.exit(1)
-end
-print(("ok: %d checks"):format(count))
+harness.report()

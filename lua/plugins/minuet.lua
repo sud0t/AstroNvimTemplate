@@ -1,9 +1,8 @@
--- Local inline (ghost text) code completion with minuet-ai.nvim (imported from AstroCommunity in community.lua)
+-- Local inline (ghost text) code completion with minuet-ai.nvim.
 -- Model: qwen2.5-coder:1.5b-base through Ollama. A base model with FIM support, small enough to stay entirely
--- in the T1000's 4GB of VRAM next to the 7b chat model, so suggestions arrive in about a second.
+-- in the T1000's 4GB of VRAM next to the chat model, so suggestions arrive in about a second.
 -- Toggled globally with <Leader>Aq (off at startup). While a suggestion is shown in insert mode:
---   <A-A> accept all, <A-l> accept line, <A-h> un-accept that line, <A-z> accept n lines,
---   <A-]>/<A-[> next/prev, <A-e> dismiss
+--   <A-A> accept all, <A-l> accept line, <A-z> accept n lines, <A-]>/<A-[> next/prev, <A-e> dismiss
 -- <A-e> is also nvim-autopairs' fast wrap key (AstroNvim's default), mapped per buffer, where it would win over
 -- minuet's dismiss. The two share the key here: it does the fast wrap whenever no suggestion is shown.
 
@@ -41,8 +40,8 @@ local function toggle()
     })
   else
     require("minuet.virtualtext").action.dismiss()
-    -- free the completion model's VRAM now instead of after Ollama's 30 min keep-alive
-    require("user.ai.ollama").unload(model, function() end)
+    -- free the completion model's VRAM now instead of when Ollama's keep-alive runs out
+    require("user.ai.ollama").unload(model)
   end
   vim.notify("AI inline completion " .. (enabled and "enabled" or "disabled"))
 end
@@ -62,56 +61,37 @@ return {
     },
     { "windwp/nvim-autopairs", optional = true, opts = { fast_wrap = { map = fast_wrap } } },
   },
-  opts = {
-    provider = "openai_fim_compatible",
-    n_completions = 1, -- one request per trigger; every extra completion is another full model run
-    -- characters around the cursor sent to the model (~600 tokens); prompt processing dominates latency on a T1000
-    context_window = 2500,
-    context_ratio = 0.75,
-    throttle = 1000,
-    debounce = 400,
-    request_timeout = 4, -- streaming: a slow answer is cut short instead of dropped
-    notify = "error",
-    provider_options = {
-      openai_fim_compatible = {
-        api_key = "TERM", -- Ollama needs no key, but minuet requires the named env var to be set
-        name = "Ollama",
-        end_point = "http://localhost:11434/v1/completions",
-        model = model,
-        stream = true,
-        optional = {
-          max_tokens = 64,
-          top_p = 0.9,
-          temperature = 0.2,
+  opts = function()
+    return {
+      provider = "openai_fim_compatible",
+      n_completions = 1, -- one request per trigger; every extra completion is another full model run
+      -- characters around the cursor sent to the model (~600 tokens); prompt processing dominates latency on a T1000
+      context_window = 2500,
+      request_timeout = 4, -- streaming: a slow answer is cut short instead of dropped
+      notify = "error",
+      provider_options = {
+        openai_fim_compatible = {
+          api_key = "TERM", -- Ollama needs no key, but minuet requires the named env var to be set
+          name = "Ollama",
+          end_point = require("user.ai.ollama").url .. "/v1/completions",
+          model = model,
+          optional = {
+            max_tokens = 64,
+            top_p = 0.9,
+            temperature = 0.2,
+          },
         },
       },
-    },
-    virtualtext = {
-      auto_trigger_ft = {}, -- auto trigger is driven by the <Leader>Aq toggle above
-      keymap = {
-        accept = "<A-A>",
-        accept_n_lines = "<A-z>",
-        next = "<A-]>",
-        prev = "<A-[>",
-        -- dismiss: <A-e>, shared with autopairs' fast wrap (see `dismiss_or_fast_wrap`)
+      virtualtext = {
+        keymap = {
+          accept = "<A-A>",
+          accept_line = "<A-l>",
+          accept_n_lines = "<A-z>",
+          next = "<A-]>",
+          prev = "<A-[>",
+          -- dismiss: <A-e>, shared with autopairs' fast wrap (see `dismiss_or_fast_wrap`)
+        },
       },
-      show_on_completion_menu = false,
-    },
-  },
-  config = function(_, opts)
-    require("minuet").setup(opts)
-    -- line by line stepping with undo (lua/user/ai/minuet_lines.lua)
-    vim.keymap.set(
-      "i",
-      "<A-l>",
-      function() require("user.ai.minuet_lines").accept() end,
-      { desc = "Accept suggestion line" }
-    )
-    vim.keymap.set(
-      "i",
-      "<A-h>",
-      function() require("user.ai.minuet_lines").undo() end,
-      { desc = "Un-accept suggestion line" }
-    )
+    }
   end,
 }

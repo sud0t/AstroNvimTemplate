@@ -15,12 +15,10 @@ return {
   { import = "astrocommunity.pack.go" }, -- adjusted in plugins/go.lua
   -- <Leader>T; the language packs add their adapters to it
   { import = "astrocommunity.test.neotest" },
-  { import = "astrocommunity.pack.typescript-all-in-one" },
+  { import = "astrocommunity.pack.typescript" },
+  { import = "astrocommunity.pack.json" },
   { import = "astrocommunity.ai.codecompanion-nvim" }, -- overridden in plugins/codecompanion.lua
-  { import = "astrocommunity.ai.minuet-ai-nvim" }, -- overridden in plugins/minuet.lua
-  { import = "astrocommunity.markdown-and-latex.vimtex" }, -- configured in plugins/latex.lua
-  -- keymaps adjusted in the matching plugins/ files
-  { import = "astrocommunity.diagnostics.trouble-nvim" },
-  { import = "astrocommunity.editing-support.refactoring-nvim" },
-  { import = "astrocommunity.git.diffview-nvim" },
+  -- off until that file turns it on: without it the chat would run on the module's defaults, with no sandbox
+  { "olimorris/codecompanion.nvim", enabled = false },
+  { import = "astrocommunity.git.diffview-nvim" }, -- keymaps adjusted in plugins/diffview.lua
 }

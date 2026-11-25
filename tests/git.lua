@@ -1,13 +1,11 @@
 -- The file tree's git commands inside the whole configuration (lua/user/git.lua).
---   nvim --headless -c 'luafile ~/.config/nvim/tests/git.lua' -c 'qa!' < /dev/null
+--   tests/run.sh git
 -- prints "ok: N checks", or what failed and exits with 1. Run it after changing that file and after an update of
 -- git: the commands rely on what git does with a branch that has no upstream, and on how it words its refusals.
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+harness.whole_config()
+local ok = harness.ok
 
 local function wait_for(what, cond) assert(vim.wait(10000, cond, 20), "timed out waiting for " .. what) end
 
@@ -119,6 +117,13 @@ local run_ok, err = xpcall(function()
     "checkout of a remote's branch makes a local one that follows it",
     git("branch", "--show-current") == "feature\n"
       and git("rev-parse", "--abbrev-ref", "feature@{upstream}") == "origin/feature\n"
+  )
+  run("checkout", "main")
+  local twin = run("checkout", "remotes/origin/feature")
+  ok(
+    "and checks the local one out when the repository has it already",
+    git("branch", "--show-current") == "feature\n" and twin[1].level == INFO,
+    vim.inspect(twin)
   )
   run("checkout", "main")
 
@@ -246,18 +251,21 @@ local run_ok, err = xpcall(function()
   ignore "we[ird]*.txt"
   ok("a name is not read as a pattern", ignored()[3] == [[/we\[ird]\*.txt]], vim.inspect(ignored()))
   ok("git ignores all three", status() == "?? .gitignore\n", status())
+  -- a repository with no file in it yet: with one, the top is refused earlier, as being in the repository
+  local fresh = { dir = base .. "/fresh" }
+  vim.fn.mkdir(fresh.dir)
+  git_in(fresh.dir, "init", "-q")
+  notes = {}
+  require("user.git").ignore(fresh, fresh.dir)
+  ok(
+    "the top of a repository is not ignored, also when no file is in it yet",
+    notes[1].level == WARN and vim.fn.filereadable(fresh.dir .. "/.gitignore") == 0,
+    vim.inspect(notes)
+  )
 
   ok("nothing reported an error", vim.v.errmsg == "", vim.v.errmsg)
 end, debug.traceback)
 
 vim.notify = notify
 vim.fn.delete(base, "rf")
-if not run_ok then failures[#failures + 1] = "the test itself failed:\n" .. tostring(err) end
-if #failures > 0 then
-  io.stderr:write(("%d of %d checks failed:\n"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    io.stderr:write("  - " .. failure .. "\n")
-  end
-  vim.cmd "cq"
-end
-print(("ok: %d checks"):format(count))
+harness.finish(run_ok, err)

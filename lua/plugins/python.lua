@@ -1,7 +1,5 @@
--- Python-only <Leader> mappings. AstroNvim and the astrocommunity python pack map the python terminal
--- (<Leader>tp) and the venv selector (<Leader>lv) globally, so which-key listed them in every buffer. They are
--- moved to buffer-local mappings in Python buffers here. The Jupyter keys (plugins/jupyter.lua) are buffer-local
--- the same way through lazy.nvim's `ft`; this only names their <Leader>j group.
+-- The python terminal (<Leader>tp) and venv selector (<Leader>lv) are mapped globally by AstroNvim and the
+-- python pack; here they exist in Python buffers only, with the <Leader>j group name for Jupyter.
 local python_only = { "<Leader>lv", "<Leader>tp" }
 
 ---@type LazySpec

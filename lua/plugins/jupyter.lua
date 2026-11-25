@@ -1,8 +1,6 @@
--- Jupyter in Neovim, rendered in the terminal (kitty):
---   molten-nvim   runs a Jupyter kernel and shows output under the cell
---   image.nvim    draws plots/images through kitty's graphics protocol
---   `# %%` cells work in any plain .py file (cell runner in lua/user/jupyter.lua, no browser needed)
--- Needs ImageMagick plus the Python packages pynvim, jupyter_client and ipykernel in the Python Neovim uses.
+-- Jupyter in the terminal (kitty): molten-nvim runs a kernel and shows the output under the cell, image.nvim draws
+-- the plots through kitty's graphics protocol. The cells are the `# %%` blocks of any .py file (user/jupyter.lua).
+-- Needs ImageMagick, and the Python packages pynvim, jupyter_client and ipykernel in the Python Neovim uses.
 
 ---@type LazySpec
 return {
@@ -10,23 +8,29 @@ return {
     "3rd/image.nvim",
     lazy = true, -- only molten needs it; loads with molten
     version = "^1.5",
-    build = false, -- skip the luarocks build, the magick_cli processor only needs ImageMagick installed
+    build = false, -- no luarocks build: magick_cli, the default processor, only needs ImageMagick installed
     opts = {
-      backend = "kitty",
-      processor = "magick_cli",
-      integrations = {}, -- molten draws its own images; leave image.nvim's document integrations off
+      -- molten draws its own images, so image.nvim draws in no document. Each integration that is on by default
+      -- is named: image.nvim merges this table into its defaults, and an empty one would change nothing.
+      integrations = {
+        markdown = { enabled = false },
+        asciidoc = { enabled = false },
+        typst = { enabled = false },
+        neorg = { enabled = false },
+        syslang = { enabled = false },
+      },
       -- molten's recommended values: max_width/max_height must be set or huge images can crash the terminal
       max_width = 100,
       max_height = 12,
       max_height_window_percentage = math.huge,
       max_width_window_percentage = math.huge,
       window_overlap_clear_enabled = true,
-      window_overlap_clear_ft_ignore = { "cmp_menu", "cmp_docs", "blink-cmp-menu", "blink-cmp-documentation", "" },
+      window_overlap_clear_ft_ignore = { "blink-cmp-menu", "blink-cmp-documentation", "" },
     },
   },
   {
     "benlubas/molten-nvim",
-    version = "^1.0.0", -- stay below 2.0 to avoid breaking changes
+    version = "^1.0.0",
     dependencies = { "3rd/image.nvim" },
     build = ":UpdateRemotePlugins", -- lazy.nvim loads the plugin first, so `config` has defined the command
     -- molten is a Python remote plugin: its commands and functions come from the remote plugin manifest, which is
@@ -39,9 +43,9 @@ return {
       vim.g.molten_auto_open_output = false -- use <leader>jo for the full output window
       vim.g.molten_wrap_output = true
       vim.g.molten_output_win_max_height = 20
-      -- tint the `# %%` lines so cells are visible in a plain .py file (window-local, so drop it again when
-      -- the window switches to another filetype)
-      vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter" }, {
+      -- Tints the `# %%` lines, so that cells show in a plain .py file. A match belongs to its window: a split
+      -- (WinNew) copies none, and a window that changes to another filetype has to drop its own.
+      vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter", "WinNew" }, {
         group = vim.api.nvim_create_augroup("jupyter_cell_markers", { clear = true }),
         callback = function()
           -- the buffer shown in the current window, which is not always the event's buffer (FileType also

@@ -1,58 +1,13 @@
 -- Tests for Claude Code in a buffer: lua/user/ai/claude_code.lua (how it is started, the keys of its buffer,
 -- what happens when it ends), lua/user/ai/claude_links.lua (what <CR> opens) and `open_chat` in
--- lua/user/ai/init.lua (<Leader>AC: Claude Code or the CodeCompanion chat).
---   nvim --clean -i NONE -l ~/.config/nvim/tests/claude_code.lua
--- prints what failed and exits with 1, or "ok". `claude` is a stand-in that writes down how it was started
--- and the bytes it is sent; the browser and the questions are stand-ins too.
---
--- What this cannot show is the real program, and the modes and the cursor of a terminal that is typed in. By
--- hand, with Claude (the Claude Code login) chosen in <Leader>As:
---    1. <Leader>AC in a file of a project: Claude Code fills the window (no split), you can type at once, it
---       is in the project's root, and its tab says `claude`. The cursor at the prompt is the bar of insert
---       mode, and it is the only one: no block beside it.
---    2. Ask it to read ~/.zshrc: refused (reads outside the directory, as `claude` in the shell).
---    3. <Esc>: normal mode, the statusline in its colour, the cursor a block where the caret was. k goes up
---       out of the prompt into the conversation, <C-u> and <C-d> scroll it; v and k select upwards and y
---       yanks; / searches. i is the prompt again, and nothing in the window has moved.
---    4. While Claude works, <Esc> <Esc> stops it (the first leaves the prompt, the second is Claude Code's).
---       In one of its menus the arrows, <C-j> <C-k>, j k and <CR> choose, as long as you are at the prompt.
---    5. `\`: the file tree, and Claude Code draws itself again in the narrower window; `\` once more. Then gg
---       and scroll down: is the conversation there once, or are parts of it repeated? The same question
---       after /compact, and after Ctrl+O twice.
---    6. With Claude Code in the only window, <CR> on a file in the file tree: it opens in a split beside it.
---    7. Above the prompt, <CR> on: a file path Claude named (opens it; `path:12` at the line), a web address
---       (opens in the browser), an address that is broken over two rows (asks first, with all of it), a file
---       outside the project, /etc/hostname say (asks first). <C-o> comes back. And a Markdown link in an
---       answer: is its address printed, to press <CR> on?
---    8. <Leader>fc on a word of the conversation: the picker greps for it; <CR> on a result opens it.
---    9. At the prompt, <S-CR> and `\` then <CR> make a new line. <C-g> opens the prompt in Neovim: <Esc> and
---       :wq work in it, and its text is in the prompt afterwards. <C-x> <C-x> <C-e> opens it too (Claude
---       Code's Ctrl+X Ctrl+E). <C-z> does nothing.
---   10. <Leader>AC from another buffer: the same session. :ls shows one terminal.
---   11. /exit: the buffer stays, in normal mode, with "[Process exited 0]" at its end; <Leader>AC starts the
---       next session, in the same directory. <Leader>x on a running session closes it at once, and /resume
---       in a new one brings the conversation back.
---   12. Quit Neovim with a session running and start it again with the last session (<Leader>Sl): no `claude`
---       starts by itself, no empty terminal buffer.
---   13. <Leader>As, choose Local (or a provider with a key): <Leader>AC is the CodeCompanion chat, in the
---       window (no split); again, and the buffer you were in is back. <Leader>Ac outside a commit still opens
---       its chat in a split.
---   14. <Leader>AC from a file of this configuration asks before it starts Claude Code here; so it does from
---       ~/.config and from ~.
---   15. The prompt is on the last rows of the window: in a new session, with nothing said yet; after `/` and
---       <Esc> (a menu opens and closes); after /clear; and while the first answers come in, without the
---       window jumping. With a long conversation, a menu that closes leaves empty rows at the top of the
---       window, not under the prompt.
---   16. At the prompt <C-h> and <C-l> move in the line. In a prompt of several lines <C-k> and <C-j> move
---       between them, and from the first and the last through the prompts before. <C-h> in an empty prompt
---       opens the agent view. After <Esc> the four are the windows.
---   17. Type a prompt until it takes a second row: the box stays whole (a rule above and below it, its mark
---       at the start). If it does not, <Esc> <C-r> draws it again; and whether it also breaks in a terminal
---       without Neovim says where the fault is:
---         CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 CLAUDE_CODE_NATIVE_CURSOR=1 claude --settings '{"tui":"default"}'
---   18. A window beside Neovim's and away again (narrower, then as wide as before): what was printed stays
---       as narrow as it was, and <Esc> <C-r> prints it again at the window's width.
+-- lua/user/ai/chat.lua (<Leader>AC: Claude Code or the CodeCompanion chat).
+--   tests/run.sh claude_code
+-- prints what failed and exits with 1, or "ok". `claude`, the browser and the questions are stand-ins: what
+-- to check by hand with the real program is in docs/claude-code.md ("Checks by hand").
 local uv = vim.uv
+
+local harness = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
+local ok = harness.ok
 
 local repo = vim.fs.dirname(vim.fs.dirname(assert(uv.fs_realpath(debug.getinfo(1, "S").source:sub(2)))))
 
@@ -67,11 +22,6 @@ vim.g.mapleader = " "
 vim.o.swapfile = false
 vim.o.wrap = false
 
-local failures, count = {}, 0
-local function ok(name, cond, detail)
-  count = count + 1
-  if not cond then failures[#failures + 1] = name .. (detail ~= nil and ("\n      " .. tostring(detail)) or "") end
-end
 local function has(text, piece) return type(text) == "string" and text:find(piece, 1, true) ~= nil end
 local function write(path, lines)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
@@ -544,7 +494,7 @@ for _, mode in ipairs { "t", "n" } do
     described = described and type(map.desc) == "string" and map.desc ~= ""
   end
 end
-ok("each says what it does (the cheatsheet lists them)", described)
+ok("each says what it does", described)
 press("t", "<S-CR>")
 ok(
   "<S-CR> is a new line for Claude Code",
@@ -920,6 +870,41 @@ end
 vim.cmd.cd(project)
 vim.cmd.edit(project .. "/notes.md")
 
+-- a session that does not start leaves no window behind: where the only window keeps its buffer (the file
+-- tree alone, say), one is made for the session
+do
+  local only = vim.api.nvim_get_current_win()
+  vim.wo[only].winfixbuf = true
+  local function as_before() return #vim.api.nvim_list_wins() == windows and vim.api.nvim_get_current_win() == only end
+  local path = vim.env.PATH
+  vim.env.PATH = base .. "/nowhere"
+  notes = {}
+  cc.open()
+  vim.env.PATH = path
+  ok("without `claude` it says so, and leaves no window", has(notes[1], "not installed") and as_before(), notes[1])
+  vim.cmd.cd(vim.env.HOME)
+  asked, answers = {}, {}
+  cc.open()
+  ok("a start that is declined leaves none either", #asked == 1 and S.job == nil and as_before(), vim.inspect(asked))
+  vim.cmd.cd(project)
+  local buffers = #vim.api.nvim_list_bufs()
+  local starts = vim.fn.jobstart
+  vim.fn.jobstart = function() return 0 end
+  notes = {}
+  cc.open()
+  vim.fn.jobstart = starts
+  ok(
+    "nor does a program that cannot be started, nor a buffer",
+    has(notes[1], "did not start") and S.job == nil and as_before() and #vim.api.nvim_list_bufs() == buffers,
+    vim.inspect { notes, #vim.api.nvim_list_wins(), #vim.api.nvim_list_bufs(), buffers }
+  )
+  vim.wo[only].winfixbuf = false
+  -- (so that a window which was left says so above, and not as an error further down)
+  vim.api.nvim_set_current_win(only)
+  vim.cmd "silent! only!"
+  vim.cmd.edit(project .. "/notes.md")
+end
+
 ------------------------------------------------------------------------------------------- <Leader>AC
 
 do
@@ -927,6 +912,7 @@ do
   -- CodeCompanion, as much of it as `open_chat` uses
   local chat_buf = vim.api.nvim_create_buf(false, true)
   local chat, made_chats, hidden = nil, {}, {}
+  local chat_fails -- true: CodeCompanion makes no chat; "raises": and raises an error
   local ui = {}
   function ui:show_in_win(opts)
     self.window_opts = opts.window_opts
@@ -936,10 +922,13 @@ do
   package.loaded["codecompanion"] = {
     last_chat = function() return chat end,
     chat = function(args)
+      if chat_fails == "raises" then error "no chat today" end
+      if chat_fails then return nil end
       made_chats[#made_chats + 1] = args
       ui.window_opts = args.window_opts
       chat = { bufnr = chat_buf, ui = ui }
       vim.api.nvim_set_current_buf(chat_buf)
+      return chat
     end,
   }
   package.loaded["codecompanion.config"] = { display = { chat = { window = { layout = "vertical" } } } }
@@ -1025,7 +1014,7 @@ do
       }
   )
 
-  -- a chat with a window of its own (the commit message's): hiding it is CodeCompanion's
+  -- a chat with a window of its own (one `:CodeCompanionChat` opened): hiding it is CodeCompanion's
   ui.window_opts = nil
   vim.api.nvim_win_set_buf(0, chat_buf)
   hidden = {}
@@ -1035,6 +1024,34 @@ do
     fine and #hidden == 1 and hidden[1].keep_window == nil,
     err or vim.inspect(hidden)
   )
+
+  -- a window that is made for the chat (only one that keeps its buffer is open) goes when no chat opens in it
+  vim.cmd "silent! only!"
+  vim.api.nvim_win_set_buf(0, file)
+  local kept = vim.api.nvim_get_current_win()
+  vim.wo[kept].winfixbuf = true
+  chat, chat_fails = nil, true
+  fine, err = chosen { provider = "ollama" }
+  ok(
+    "a window made for a chat that CodeCompanion does not open is closed again",
+    fine and #vim.api.nvim_list_wins() == 1 and vim.api.nvim_get_current_win() == kept,
+    err or #vim.api.nvim_list_wins()
+  )
+  chat_fails = "raises"
+  fine, err = chosen { provider = "ollama" }
+  ok(
+    "also when opening it fails with an error, which is passed on",
+    not fine and has(err, "no chat today") and #vim.api.nvim_list_wins() == 1,
+    vim.inspect { fine, err, #vim.api.nvim_list_wins() }
+  )
+  chat_fails = nil
+  fine, err = chosen { provider = "ollama" }
+  ok(
+    "and one a chat opens in stays",
+    fine and #vim.api.nvim_list_wins() == 2 and vim.api.nvim_get_current_buf() == chat_buf,
+    err or #vim.api.nvim_list_wins()
+  )
+  vim.wo[kept].winfixbuf = false
 end
 
 ------------------------------------------------------------------------------------------------------ the pin
@@ -1183,11 +1200,4 @@ end
 ---------------------------------------------------------------------------------------------------- result
 
 vim.fn.delete(base, "rf")
-if #failures > 0 then
-  print(("%d of %d checks failed:"):format(#failures, count))
-  for _, failure in ipairs(failures) do
-    print("  - " .. failure)
-  end
-  os.exit(1)
-end
-print(("ok: %d checks"):format(count))
+harness.report()

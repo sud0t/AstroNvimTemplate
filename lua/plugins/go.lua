@@ -1,17 +1,17 @@
--- Go, on top of the AstroCommunity go pack (community.lua):
---   gopls           LSP: completion, diagnostics (with the staticcheck analyzers), inlay hints, code lenses; it also
---                   formats (gofumpt). Go files are formatted and their imports organized on save, the Go convention
---                   (everything else keeps format on save off; <Leader>uf toggles it per buffer).
---   golangci-lint   linter, through golangci-lint-langserver (diagnostics appear after a save; a project's
---                   .golangci.yml is picked up)
---   delve           debugger, through nvim-dap-go: the usual <Leader>d keys, plus <Leader>dt to debug the test
---                   under the cursor
---   neotest         test runner with neotest-golang (<Leader>T, see `astrocommunity.test.neotest`)
---   gopher.nvim     struct tags, `if err != nil`, interface stubs, test skeletons, doc comments (<Leader>G)
--- Everything is installed through Mason and nothing loads before it is needed: the language servers start with
--- the first Go buffer, the debugger with the first debug key, neotest and gopher.nvim with their first mapping.
+-- Go, on top of the AstroCommunity go pack: imports organized with the format on save (plugins/astrolsp.lua),
+-- golangci-lint, gopher.nvim on <Leader>G, and the debugger loaded on its first key, not on every Go buffer.
 
 local function is_gopls(client) return client.name == "gopls" end
+
+--- Makes every mapping in `maps` exist only in the buffers of the clients `cond` accepts.
+local function only_for(cond, maps)
+  for _, mode_maps in pairs(maps) do
+    for _, map in pairs(mode_maps) do
+      map.cond = cond
+    end
+  end
+  return maps
+end
 
 -- gopls keeps imports apart from formatting: they are the `source.organizeImports` code action
 local function organize_imports(bufnr)
@@ -50,12 +50,7 @@ return {
       local gopls = vim.tbl_get(opts, "config", "gopls", "settings", "gopls")
       if gopls then gopls.buildFlags = nil end
 
-      local astrocore = require "astrocore"
-      local format_on_save = opts.formatting.format_on_save
-      format_on_save.enabled = true
-      format_on_save.allow_filetypes = astrocore.list_insert_unique(format_on_save.allow_filetypes, { "go" })
-
-      return astrocore.extend_tbl(opts, {
+      return require("astrocore").extend_tbl(opts, {
         autocmds = {
           go_organize_imports = {
             cond = is_gopls,
@@ -66,39 +61,31 @@ return {
             },
           },
         },
-        mappings = {
+        mappings = only_for(is_gopls, {
           n = {
-            ["<Leader>G"] = { desc = "Go", cond = is_gopls },
-            ["<Leader>Gt"] = { gopher { "GoTagAdd", "json" }, desc = "Add json struct tags", cond = is_gopls },
-            ["<Leader>GT"] = { cmdline "GoTagAdd ", desc = "Add struct tags...", cond = is_gopls },
-            ["<Leader>Gr"] = { gopher "GoTagClear", desc = "Remove struct tags", cond = is_gopls },
-            ["<Leader>Ge"] = { gopher "GoIfErr", desc = "Insert if err != nil", cond = is_gopls },
-            ["<Leader>Gi"] = { cmdline "GoImpl ", desc = "Implement interface...", cond = is_gopls },
-            ["<Leader>Gc"] = { gopher "GoCmt", desc = "Add doc comment", cond = is_gopls },
-            ["<Leader>Ga"] = { gopher "GoTestAdd", desc = "Add test for function", cond = is_gopls },
-            ["<Leader>GA"] = { gopher "GoTestsAll", desc = "Add tests for all functions", cond = is_gopls },
-            ["<Leader>Gm"] = { gopher { "GoMod", "tidy" }, desc = "go mod tidy", cond = is_gopls },
-            ["<Leader>Gg"] = { gopher { "GoGenerate", "%" }, desc = "go generate (file)", cond = is_gopls },
-            ["<Leader>Gd"] = { cmdline "GoGet ", desc = "go get...", cond = is_gopls },
-            ["<Leader>dt"] = {
-              function() require("dap-go").debug_test() end,
-              desc = "Debug Go test at cursor",
-              cond = is_gopls,
-            },
-            ["<Leader>dT"] = {
-              function() require("dap-go").debug_last_test() end,
-              desc = "Debug last Go test",
-              cond = is_gopls,
-            },
+            ["<Leader>G"] = { desc = "Go" },
+            ["<Leader>Gt"] = { gopher { "GoTagAdd", "json" }, desc = "Add json struct tags" },
+            ["<Leader>GT"] = { cmdline "GoTagAdd ", desc = "Add struct tags..." },
+            ["<Leader>Gr"] = { gopher "GoTagClear", desc = "Remove struct tags" },
+            ["<Leader>Ge"] = { gopher "GoIfErr", desc = "Insert if err != nil" },
+            ["<Leader>Gi"] = { cmdline "GoImpl ", desc = "Implement interface..." },
+            ["<Leader>Gc"] = { gopher "GoCmt", desc = "Add doc comment" },
+            ["<Leader>Ga"] = { gopher "GoTestAdd", desc = "Add test for function" },
+            ["<Leader>GA"] = { gopher "GoTestsAll", desc = "Add tests for all functions" },
+            ["<Leader>Gm"] = { gopher { "GoMod", "tidy" }, desc = "go mod tidy" },
+            ["<Leader>Gg"] = { gopher { "GoGenerate", "%" }, desc = "go generate (file)" },
+            ["<Leader>Gd"] = { cmdline "GoGet ", desc = "go get..." },
+            ["<Leader>dt"] = { function() require("dap-go").debug_test() end, desc = "Debug Go test at cursor" },
+            ["<Leader>dT"] = { function() require("dap-go").debug_last_test() end, desc = "Debug last Go test" },
           },
           x = {
-            ["<Leader>G"] = { desc = "Go", cond = is_gopls },
+            ["<Leader>G"] = { desc = "Go" },
             -- `:` from visual mode fills in the '<,'> range: tags for the selected fields only
-            ["<Leader>Gt"] = { ":GoTagAdd json<CR>", desc = "Add json struct tags", cond = is_gopls },
-            ["<Leader>GT"] = { ":GoTagAdd ", desc = "Add struct tags...", cond = is_gopls },
-            ["<Leader>Gr"] = { ":GoTagRm json<CR>", desc = "Remove json struct tags", cond = is_gopls },
+            ["<Leader>Gt"] = { ":GoTagAdd json<CR>", desc = "Add json struct tags" },
+            ["<Leader>GT"] = { ":GoTagAdd ", desc = "Add struct tags..." },
+            ["<Leader>Gr"] = { ":GoTagRm json<CR>", desc = "Remove json struct tags" },
           },
-        },
+        }),
       })
     end,
   },
@@ -115,16 +102,16 @@ return {
     "jay-babu/mason-null-ls.nvim",
     optional = true,
     opts = function(_, opts)
-      -- The pack installs these for gopher.nvim. Both also have a none-ls builtin, which mason-null-ls would
-      -- register whenever none-ls happens to be loaded (it is not for Go, see plugins/none-ls.lua), and a none-ls
-      -- formatter takes formatting away from gopls (gofumpt). gopls and gopher.nvim cover both.
+      -- Installed for gopher.nvim and golangci_lint_ls. Once another filetype has loaded none-ls, mason-null-ls
+      -- would register each as a none-ls source too: a formatter over gopls, and every lint diagnostic twice.
       opts.handlers = opts.handlers or {}
-      opts.handlers.goimports = function() end
-      opts.handlers.gomodifytags = function() end
+      for _, tool in ipairs { "goimports", "gomodifytags", "golangci_lint", "impl" } do
+        opts.handlers[tool] = function() end
+      end
     end,
   },
-  -- The pack loads nvim-dap-go, and with it the whole debugger stack, on every Go buffer. As for Python
-  -- (plugins/dap.lua), load it together with nvim-dap instead, on the first debug key.
+  -- The pack loads nvim-dap-go, and with it the debugger stack, on every Go buffer: load it with nvim-dap, on
+  -- the first debug key (as for Python, plugins/dap.lua).
   {
     "leoluz/nvim-dap-go",
     ft = function() return {} end, -- drop the pack's `ft = "go"` trigger

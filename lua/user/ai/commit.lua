@@ -1,16 +1,9 @@
--- <Leader>Ac: write a commit message for the current changes, with the AI chosen with <Leader>As (the local
--- model, Claude or another provider's model).
---   In the editor `git commit` opens (COMMIT_EDITMSG): the message for the whole commit is written straight into
---   the buffer as the model writes it, above git's comment lines. `u` takes it out again; pressing the key
---   again writes another one (or cancels the one being written).
---   Anywhere else: a CodeCompanion chat answers with the message in a code block (`gy` yanks it) and stays open
---   to ask for changes ("shorter", "mention the config change", ...). It describes the staged diff of the
---   repository the current file is in, or everything changed in the working tree when nothing is staged.
--- Both use the same instructions (M.system; the chat is the "Commit message" entry in plugins/codecompanion.lua).
--- How much is written follows the size of the change: one line for a small one, a few bullets of context below
--- it for a larger one. The size is measured here (`measure`, `tier_of`) and the model is told the format as a
--- fact: left to judge the size itself, the local model answers with one line for every change.
--- <Leader>AS, Commit detail, moves that: always one line, or one step more than the size calls for.
+-- <Leader>Ac in the editor `git commit` opens (COMMIT_EDITMSG): write the commit's message with the AI chosen
+-- with <Leader>As, into the buffer as the model writes it, above git's comment lines. `u` takes it out again;
+-- the key again writes another one (or cancels the one being written).
+-- How much is written follows the size of the change (`measure`, `tier_of`): one line for a small one, a few
+-- bullets below it for a larger one. The model is told the format as a fact: left to judge the size itself,
+-- the local model answers with one line for every change.
 local M = {}
 
 local instructions = [[
@@ -21,8 +14,7 @@ Rules:
 - First line: a summary of at most 60 characters, imperative mood, no trailing period. Follow the style of the recent commit subjects (prefixes, capitalisation); do not add a "feat:"/"fix:" prefix unless they use one.
 - Describe only what the diff shows. Do not invent reasons, do not mention files that did not change.]]
 
--- What goes below the first line, per size of change: `bullets` is how many (none for a small change), `label`
--- names the message in the notification.
+-- What goes below the first line per size of change: how many `bullets`; `label` is its name in the note.
 local tiers = {
   small = { label = "one-line" },
   medium = { label = "short", bullets = "2 or 3" },
@@ -52,21 +44,13 @@ local function measure(numstat)
   return { files = files, lines = lines }
 end
 
---- "small", "medium" or "large" for a size, moved by the Commit detail setting (`mode`).
--- Set against this repository's history (lock files left out): its small commits change 2 to 19 lines in 1 or 2
--- files, the middle ones 46 to 217 lines in 2 to 5 files, the big ones 403 lines and more. Many files only make
--- a change large with enough lines in them (ten files of one-line path edits are not), and a handful of lines
--- is small however many files they are in.
-local function tier_of(size, mode)
-  if size.lines == 0 or mode == "brief" then return "small" end -- (no lines: nothing in the diff to describe)
-  local tier = "medium"
-  if size.lines <= 10 or (size.files <= 2 and size.lines <= 40) then
-    tier = "small"
-  elseif size.lines >= 300 or (size.files >= 6 and size.lines >= 100) then
-    tier = "large"
-  end
-  if mode == "detailed" then return tier == "small" and "medium" or "large" end
-  return tier
+--- "small", "medium" or "large" for a size.
+-- Thresholds from this repository's history: small commits are 2-19 lines in 1-2 files, large ones 400+.
+-- Many files only make a change large when they hold enough lines.
+local function tier_of(size)
+  if size.lines <= 10 or (size.files <= 2 and size.lines <= 40) then return "small" end
+  if size.lines >= 300 or (size.files >= 6 and size.lines >= 100) then return "large" end
+  return "medium"
 end
 
 -- What fits the local model's 8k context next to the instructions and the answer (~3 characters per token for
@@ -75,13 +59,11 @@ local function max_prompt_chars() return require("user.ai").is_local() and 18000
 -- generated files: they are in the summary of changed files, their content only crowds out the real changes
 local noise = { ":(exclude)*.lock", ":(exclude)*-lock.json", ":(exclude)*.lock.json", ":(exclude)*.min.js" }
 
-local changes -- what `M.open` found, for the prompt that it starts
+local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Commit message" }) end
 
 local function git(dir, args)
-  -- A repository's own configuration can name programs for git to run. These calls read a repository that may
-  -- be someone else's, so the hooks that would run here are off: core.fsmonitor and the signature check of
-  -- `git log` (which runs gpg.program) here, external diff drivers and textconv filters where the diffs are
-  -- made. (Not all of them can be: a `filter` still runs.)
+  -- The repository may be someone else's: switch off what its configuration can make git run (fsmonitor,
+  -- gpg through showSignature; external diff and textconv at the diff calls). A `filter` still runs.
   local cmd = vim.list_extend({ "git", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-C", dir }, args)
   local res = vim.system(cmd, { text = true }):wait()
   return res.code == 0 and vim.trim(res.stdout or "") or nil
@@ -127,44 +109,27 @@ local function fit(diff, max)
   return table.concat(files, "\n"), true
 end
 
---- The changes to describe: { staged, stat, diff, log, truncated, size, tier }, or nil and the reason there
---- are none.
-local function collect()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local name = vim.api.nvim_buf_get_name(bufnr)
-  local dir = vim.bo.buftype == "" and name ~= "" and vim.fs.dirname(name) or vim.fn.getcwd()
-  local committing = is_commit_buffer(bufnr)
-  -- COMMIT_EDITMSG is inside the git directory, which is not part of the work tree: git started the editor in
-  -- the repository (and the git directory of a worktree or submodule is somewhere else entirely)
-  if committing then dir = vim.fn.getcwd() end
-  if vim.fn.isdirectory(dir) == 0 then dir = vim.fn.getcwd() end
-  local root = git(dir, { "rev-parse", "--show-toplevel" })
-  if not root and committing and vim.fs.basename(vim.fs.dirname(name)) == ".git" then
-    root = git(vim.fs.dirname(vim.fs.dirname(name)), { "rev-parse", "--show-toplevel" })
+--- The changes the commit of the COMMIT_EDITMSG buffer `bufnr` makes: { stat, diff, log, truncated, size,
+--- tier }, or nil and the reason there are none.
+local function collect(bufnr)
+  -- COMMIT_EDITMSG is in the git directory, which is not part of the work tree (and that of a worktree or
+  -- submodule is somewhere else entirely): git started the editor in the repository
+  local root = git(vim.fn.getcwd(), { "rev-parse", "--show-toplevel" })
+  local git_dir = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
+  if not root and vim.fs.basename(git_dir) == ".git" then
+    root = git(vim.fs.dirname(git_dir), { "rev-parse", "--show-toplevel" })
   end
   if not root then return nil, "Not in a git repository" end
 
-  local base
-  if committing then
-    -- What is being committed is the index (git points GIT_INDEX_FILE at the right one for `commit -a` and
-    -- `commit <paths>`). With --amend the buffer starts with the message of HEAD, and the commit replaces it.
-    base = { "diff", "--no-ext-diff", "--staged", "--no-textconv" }
-    local typed = vim.trim(table.concat(message_lines(bufnr), "\n"))
-    if typed ~= "" and typed == git(root, { "log", "-1", "--format=%B" }) and git(root, { "rev-parse", "HEAD~1" }) then
-      table.insert(base, "HEAD~1")
-    end
-  else
-    local staged = git(root, { "diff", "--no-ext-diff", "--no-textconv", "--staged", "--stat" }) ~= ""
-    base = staged and { "diff", "--no-ext-diff", "--staged", "--no-textconv" }
-      or { "diff", "--no-ext-diff", "HEAD", "--no-textconv" }
+  -- What is being committed is the index (git points GIT_INDEX_FILE at the right one for `commit -a` and
+  -- `commit <paths>`). With --amend the buffer starts with the message of HEAD, and the commit replaces it.
+  local base = { "diff", "--no-ext-diff", "--staged", "--no-textconv" }
+  local typed = vim.trim(table.concat(message_lines(bufnr), "\n"))
+  if typed ~= "" and typed == git(root, { "log", "-1", "--format=%B" }) and git(root, { "rev-parse", "HEAD~1" }) then
+    table.insert(base, "HEAD~1")
   end
-  local staged = base[3] == "--staged"
   local stat = git(root, vim.list_extend(vim.deepcopy(base), { "--stat" }))
-  if not stat or stat == "" then
-    if committing then return nil, "Nothing is staged for this commit" end
-    local untracked = git(root, { "ls-files", "--others", "--exclude-standard" })
-    return nil, untracked ~= "" and "Only untracked files: stage them first (git add)" or "No changes to commit"
-  end
+  if not stat or stat == "" then return nil, "Nothing is staged for this commit" end
   local function without_noise(option)
     return git(root, vim.list_extend(vim.list_extend(vim.deepcopy(base), { option, "--" }), noise))
   end
@@ -172,22 +137,11 @@ local function collect()
   -- the file list grows with the commit: the diff gets what it and the subjects leave of the budget
   local diff, truncated = fit(without_noise "--patch" or "", math.max(max_prompt_chars() - #stat - #log, 2000))
   local size = measure(without_noise "--numstat")
-  return {
-    staged = staged,
-    stat = stat,
-    diff = diff,
-    truncated = truncated,
-    log = log,
-    size = size,
-    tier = tier_of(size, require("user.ai.settings").get "commit_detail"),
-  }
+  return { stat = stat, diff = diff, truncated = truncated, log = log, size = size, tier = tier_of(size) }
 end
 
---- The instructions for the size of these changes. `reply`: "plain" for the commit buffer, which takes the
---- message as it is, "block" for the chat.
-function M.system(reply)
-  local c = changes or collect()
-  local tier = c and c.tier or "small"
+--- The instructions for a change of the size `tier`.
+local function system(tier)
   local bullets = tiers[tier].bullets
   local parts = { instructions }
   if bullets then
@@ -196,22 +150,12 @@ function M.system(reply)
   else
     parts[#parts + 1] = "\n- This is a small change: write the first line only, nothing below it."
   end
-  parts[#parts + 1] = reply == "block"
-      and "\n- Reply with the commit message inside one ``` code block and nothing else."
-    or "\n- Reply with the commit message only: no code block, no explanation."
+  parts[#parts + 1] = "\n- Reply with the commit message only: no code block, no explanation."
   return table.concat(parts)
 end
 
---- Text out of the repository (file names, commit subjects, the diff) as a code block of a chat message.
---- Outside a commit buffer the message goes through CodeCompanion's chat, which reads `@{name}` anywhere in a
---- message as "give this chat the tool" and `#{name}` as "attach this" (every open buffer, for one), and
---- attaches the files and pages that links outside a code block point to. A repository could ask for all of
---- that with a file name or a commit subject. So: a space takes the meaning of `@{` and `#{` away (and changes
---- nothing a commit message is about), and the fence is one backtick longer than any run of them in the
---- text, so nothing in it ends the block early. `as_it_is`: without the space, for a message that goes to the
---- model directly (in a commit buffer), where `HEAD@{1}` should stay what it is.
-local function block(text, info, as_it_is)
-  if not as_it_is then text = text:gsub("([@#]){", "%1 {") end
+--- `text` from the repository as a fenced block, the fence longer than any run of backticks in the text.
+local function block(text, info)
   local longest = 2
   for run in text:gmatch "`+" do
     longest = math.max(longest, #run)
@@ -220,22 +164,19 @@ local function block(text, info, as_it_is)
   return { fence .. (info or ""), text, fence }
 end
 
---- The user message of the prompt. `reply`: as for `M.system`; anything but "plain" is a message for the chat.
-function M.prompt(reply)
-  local c = changes or collect()
-  if not c then return "There are no changes to commit; say so." end
-  local direct = reply == "plain"
+--- The user message for the changes `c` (from `collect`).
+local function prompt(c)
   local parts = { "Write the commit message for these changes.", "", "Changed files:" }
-  vim.list_extend(parts, block(c.stat, nil, direct))
+  vim.list_extend(parts, block(c.stat))
   if c.log ~= "" then
     vim.list_extend(parts, { "", "Recent commit subjects in this repository, for the style:" })
-    vim.list_extend(parts, block(c.log, nil, direct))
+    vim.list_extend(parts, block(c.log))
   end
   vim.list_extend(parts, {
     "",
     c.truncated and "The diff (long files are cut short; the file list above is complete):" or "The diff:",
   })
-  vim.list_extend(parts, block(c.diff, "diff", direct))
+  vim.list_extend(parts, block(c.diff, "diff"))
   vim.list_extend(parts, {
     "",
     -- said again after the diff: what a small model read last is what it follows
@@ -246,9 +187,9 @@ function M.prompt(reply)
 end
 
 --- The message out of the model's answer (also a partial one, while it is being written): without code
---- fences, reasoning or surrounding blank lines.
+--- fences or surrounding blank lines.
 local function clean(text)
-  text = text:gsub("<think>.-</think>", ""):gsub("\r", "")
+  text = text:gsub("\r", "")
   local lines = vim.split(vim.trim(text), "\n", { plain = true })
   if lines[1]:find "^```" then table.remove(lines, 1) end
   if lines[#lines] and lines[#lines]:find "^```%s*$" then table.remove(lines) end
@@ -313,27 +254,17 @@ end
 
 local writing = {} -- bufnr -> the request that is running for it
 
---- Write the message for the commit into its COMMIT_EDITMSG buffer, as the model writes it.
+--- Write the message for the changes `found` into their COMMIT_EDITMSG buffer, as the model writes it.
 local function write(bufnr, found)
-  local function notify(msg, level) vim.notify(msg, level or vim.log.levels.INFO, { title = "Commit message" }) end
-  if writing[bufnr] then
-    writing[bufnr].cancel()
-    writing[bufnr] = nil
-    return notify "Cancelled"
-  end
   local ai = require "user.ai"
-  local is_local = ai.is_local()
-  changes = found
   local request = {
-    system = M.system "plain",
-    messages = { { role = "user", content = M.prompt "plain" } },
+    system = system(found.tier),
+    messages = { { role = "user", content = prompt(found) } },
     -- (the providers: a ceiling, not a target. A model's thinking counts towards it, and a low one can end
     -- the answer before any text)
-    max_tokens = is_local and 320 or 16000,
-    -- keep_alive as the CodeCompanion chat: the two share the loaded model
-    ollama = { keep_alive = "5m", options = { num_ctx = 8192, temperature = 0.2 } },
+    max_tokens = ai.is_local() and 320 or 16000,
+    ollama = { options = { num_ctx = require("user.ai.ollama").context, temperature = 0.2 } },
   }
-  changes = nil
 
   local stream = require "user.ai.stream"
   -- replaces what is above git's comments: an earlier attempt, or the empty line git starts with
@@ -366,14 +297,11 @@ local function write(bufnr, found)
       ai.label()
     )
   )
-  local function release_gpu()
-    if is_local then require("user.ai.ollama").unload_spilled(ai.local_model()) end
-  end
   local function send()
     local handle
     handle = ai.chat(request, function(text) show(message(text)) end, function(answer, info)
       writing[bufnr] = nil
-      if not vim.api.nvim_buf_is_loaded(bufnr) then return release_gpu() end -- the commit was closed meanwhile
+      if not vim.api.nvim_buf_is_loaded(bufnr) then return end -- the commit was closed meanwhile
       local lines = message(answer)
       local kept -- why the first answer stands, when the second one brought nothing
       if first then
@@ -402,7 +330,6 @@ local function write(bufnr, found)
       end
       if not info.error then show(lines) end -- (also puts the first answer back)
       region:release()
-      release_gpu()
       if info.error then return notify("Request failed: " .. info.error, vim.log.levels.ERROR) end
       if lines[1] == "" then return notify("The model gave no message", vim.log.levels.WARN) end
       for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
@@ -433,22 +360,20 @@ end
 --- <Leader>Ac
 function M.open()
   local bufnr = vim.api.nvim_get_current_buf()
-  local found, reason = collect()
-  if not found then return vim.notify(reason, vim.log.levels.WARN, { title = "Commit message" }) end
-  if is_commit_buffer(bufnr) then return write(bufnr, found) end
-  if not found.staged then
-    vim.notify("Nothing is staged: describing all changes in the working tree", vim.log.levels.INFO, {
-      title = "Commit message",
-    })
+  if writing[bufnr] then
+    writing[bufnr].cancel()
+    writing[bufnr] = nil
+    return notify "Cancelled"
   end
-  changes = found
-  local ok, err = pcall(function() require("codecompanion").prompt "commitmsg" end)
-  changes = nil
-  if not ok then error(err, 0) end
+  if not is_commit_buffer(bufnr) then
+    return notify(
+      "No commit is being written here: start one first (<Leader>gc in the file tree, or `git commit`).",
+      vim.log.levels.WARN
+    )
+  end
+  local found, reason = collect(bufnr)
+  if not found then return notify(reason, vim.log.levels.WARN) end
+  write(bufnr, found)
 end
-
--- for tests
-M._measure, M._tier_of, M._clean, M._with_body, M._retry_prompt = measure, tier_of, clean, with_body, retry_prompt
-M._block = block
 
 return M

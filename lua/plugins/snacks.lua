@@ -1,5 +1,4 @@
--- The Git pickers of a file buffer only look: what changes the repository is done from the file tree
--- (plugins/neo-tree.lua), with its <Leader>g keys. The pickers the tree opens have no keys of their own for it.
+-- The Git pickers only look: the repository is changed from the file tree, on <Leader>g (plugins/neo-tree.lua).
 
 --- Enter on a commit shows it in Diffview, where snacks would check it out.
 local function show_commit(picker, item)

@@ -1,20 +1,17 @@
--- refactoring.nvim (imported from AstroCommunity in community.lua). Every refactor is an operator: in normal
--- mode it waits for a motion/textobject (`<Leader>re` then `ip`, `_` = current line, ...), in visual mode it
--- uses the selection. The community mappings are replaced: they predate the current refactoring.nvim API,
--- overlap (`<Leader>rb` / `<Leader>rbf` make `rb` wait for the timeout) and are also set in select mode,
--- where typing a space into a snippet placeholder would trigger them.
+-- refactoring.nvim. Extract and the debug prints are operators: in normal mode they wait for a motion
+-- (`<Leader>re` then `ip`; `_` is the current line), in visual mode they take the selection. The keys are not
+-- set in select mode, where a space typed over a snippet placeholder would start them.
 
-local function refactor(name, opts)
-  return function() return require("refactoring")[name](opts) end
+local function refactor(name)
+  return function() return require("refactoring")[name]() end
 end
-local function debug(name, opts, suffix)
-  return function() return require("refactoring.debug")[name](opts) .. (suffix or "") end
+local function debug_operator(name, suffix)
+  return function() return require("refactoring.debug")[name]() .. (suffix or "") end
 end
 
--- Inline variable/function, started from the definition. From a usage, basedpyright answers
--- `textDocument/references` with includeDeclaration = false by leaving out the *requested* position instead of the
--- declaration, so refactoring.nvim deletes the definition but never replaces the usage. Jumping to the definition
--- first (in the same buffer) avoids that and works the same for every language server.
+-- Inline variable/function, started from the definition. From a usage, basedpyright answers the references
+-- request without the requested position, not without the declaration, so refactoring.nvim deletes the
+-- definition and never replaces the usage. Jumping to the definition first works for every language server.
 local function inline_from_definition(name)
   return function()
     -- refactoring.nvim only ships the queries inline_func needs for some languages (currently only Lua)
@@ -46,29 +43,20 @@ local function inline_from_definition(name)
   end
 end
 
--- debug print clean-up for the whole buffer (normal mode); in visual mode it cleans up the selection
-local function cleanup_buffer()
-  vim.cmd.normal { "ggVG" .. require("refactoring.debug").cleanup { restore_view = true }, bang = true }
-end
-
-local below = { output_location = "below" }
+local function cleanup_buffer() vim.cmd.normal { "ggVG" .. require("refactoring.debug").cleanup(), bang = true } end
 
 ---@type LazySpec
 return {
   "ThePrimeagen/refactoring.nvim",
-  event = function() return {} end, -- the mappings and :Refactor load it, no need on every file
-  cmd = "Refactor",
+  cmd = "Refactor", -- the mappings load it too, by requiring it
+  dependencies = { "lewis6991/async.nvim" },
+  opts = {},
   specs = {
+    { "AstroNvim/astroui", opts = { icons = { Refactoring = "󰣪" } } },
     {
       "AstroNvim/astrocore",
       opts = function(_, opts)
         local maps = opts.mappings
-        maps.x = maps.x or {}
-        for _, mode in ipairs { "n", "x", "v" } do
-          for lhs in pairs(maps[mode] or {}) do
-            if lhs:match "^<Leader>r" then maps[mode][lhs] = nil end
-          end
-        end
         local group = { desc = require("astroui").get_icon("Refactoring", 1, true) .. "Refactor" }
         local both = {
           ["<Leader>re"] = { refactor "extract_func", desc = "Extract function", expr = true },
@@ -77,21 +65,17 @@ return {
           ["<Leader>ri"] = { inline_from_definition "inline_var", desc = "Inline variable" },
           ["<Leader>rI"] = { inline_from_definition "inline_func", desc = "Inline function" },
           ["<Leader>rs"] = { function() require("refactoring").select_refactor() end, desc = "Select refactor" },
-          ["<Leader>rP"] = { debug("print_exp", below), desc = "Debug: print expression", expr = true },
+          ["<Leader>rP"] = { debug_operator "print_exp", desc = "Debug: print expression", expr = true },
         }
         maps.n["<Leader>r"], maps.x["<Leader>r"] = group, group
         for lhs, map in pairs(both) do
           maps.n[lhs], maps.x[lhs] = map, map
         end
-        maps.n["<Leader>rp"] = { debug("print_var", below, "iw"), desc = "Debug: print variable", expr = true }
-        maps.x["<Leader>rp"] = { debug("print_var", below), desc = "Debug: print variables", expr = true }
-        maps.n["<Leader>rl"] = { debug("print_loc", below), desc = "Debug: print location", expr = true }
+        maps.n["<Leader>rp"] = { debug_operator("print_var", "iw"), desc = "Debug: print variable", expr = true }
+        maps.x["<Leader>rp"] = { debug_operator "print_var", desc = "Debug: print variables", expr = true }
+        maps.n["<Leader>rl"] = { debug_operator "print_loc", desc = "Debug: print location", expr = true }
         maps.n["<Leader>rc"] = { cleanup_buffer, desc = "Debug: clean up prints (buffer)" }
-        maps.x["<Leader>rc"] = {
-          debug("cleanup", { restore_view = true }),
-          desc = "Debug: clean up prints (selection)",
-          expr = true,
-        }
+        maps.x["<Leader>rc"] = { debug_operator "cleanup", desc = "Debug: clean up prints (selection)", expr = true }
       end,
     },
   },

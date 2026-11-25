@@ -1,69 +1,13 @@
--- Claude Code in a buffer.
---
--- <Leader>AC, when the AI chosen in <Leader>As is Claude through the Claude Code login (lua/user/ai/init.lua,
--- `open_chat`), runs the `claude` terminal program itself as an ordinary buffer in the current window: no
--- split. Pressed again from anywhere it comes back to the session that is running. Claude Code starts in the
--- project of the file you were in (the root AstroNvim finds for it), or in Neovim's directory.
---
--- It is one terminal buffer, used with the keys of every other buffer. The prompt is its insert mode
--- (terminal mode: what you type goes to Claude Code), and what Claude Code has printed above it is text:
---   <Esc>         leaves the prompt, as it leaves insert mode. j k and the other motions then go up into the
---                 conversation, <C-u> <C-d> scroll it, / searches it, v V select and y yanks; `\` is the file
---                 tree and <Leader>… what it is everywhere. i a I A go back to the prompt, and p pastes
---                 into it.
---   <C-h> <C-j> <C-k> <C-l>
---                 at the prompt: the arrow keys, as in insert mode. Left and right move in the line; up and
---                 down move between the lines of the prompt, from its first and last one to the prompts
---                 before, and choose in Claude Code's menus. (Left in an empty prompt is Claude Code's agent
---                 view.) Above the prompt they are the window on that side, as everywhere.
---   <Esc>         above the prompt is Claude Code's own Escape: it stops Claude, closes a menu
---   <C-r>         above the prompt is Claude Code's Ctrl+L: it draws its screen again, for when what is
---                 there is not what should be (rows drawn over each other, text as narrow as the window was)
---   <CR>          above the prompt opens what the cursor is on: a web address in the browser, a file in this
---                 window, at `path:12:3` when it says so (lua/user/ai/claude_links.lua)
---   <S-CR>        a new line in the prompt (so is `\` then <CR>)
---   <C-x>         leaves the prompt, as in every terminal. Above the prompt it is Claude Code's own Ctrl+X,
---                 with the key after it: its Ctrl+X Ctrl+K is <C-x><C-x><C-k> from the prompt, and you are
---                 at the prompt again (<C-x><Esc>: nothing)
---   <C-z>         nothing: it would stop Claude Code, with no shell here to bring it back
--- Nothing else is mapped here. <Leader>fc, <Leader>x, gx, <Tab> and the rest are the global mappings, and a
--- file opened from the file tree or a picker goes where it goes from any terminal (a split of its own, when
--- this is the only window). Like every terminal the buffer cannot be edited (x, dd, u say so): the prompt
--- is edited at the prompt, or with Claude Code's Ctrl+G in a Neovim of its own, which gets <Esc> and the
--- other keys of the prompt while it is open.
---
--- The prompt is at the bottom of the window. Claude Code itself starts on the terminal's first row, and
--- leaves the rows under its prompt empty whenever what it shows gets shorter (a menu closes): at the prompt
--- the window is kept with those rows below it, out of sight, and has as many empty ones at its top
--- (`pin`). Above the prompt the window is Neovim's to scroll, and G goes to the last of those rows. For
--- the pin 'scrolloff' is 0 in a window while it shows the session.
---
--- Claude Code runs as `claude` does in the shell (where a function of the same name adds the first of
--- these), with what makes it a buffer:
---   - reads outside the directory it works in are refused
---   - its own vim mode is off: the modes are Neovim's (`editorMode`)
---   - it prints on the terminal's main screen and never takes the whole of it, so the conversation stays in
---     the buffer, above the prompt (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN; `tui` for its offer to switch).
---     The buffer keeps the last 'scrollback' rows of it.
---   - its caret is the terminal's cursor, not a block it draws: one cursor, where Neovim's is, shaped as in
---     insert mode at the prompt and a block above it (CLAUDE_CODE_NATIVE_CURSOR, and `start`)
---   - a web link is printed as its address, which <CR> and gx can read (FORCE_HYPERLINK)
---   - it uses the login, not a key Neovim may have in $ANTHROPIC_API_KEY (that one is for the CodeCompanion
---     chat, and would be read by every command Claude Code runs); and it is not told where this Neovim
---     listens ($NVIM), with which a command it runs could drive the editor
--- Started in this configuration's own directory or one that holds it (asked first, like the home directory)
--- it can change everything here for the next start of Neovim: as it can any project's files.
---
--- <CR> on a file outside the directory Claude Code was started in asks first, with the file's real path:
--- what is printed need not be what it seems, and opening a file starts what the editor has for its kind (a
--- language server takes its settings, and for some languages programs to run, from the file's project).
---
--- Closing the buffer ends the program, as with every terminal (<Leader>x does not ask). The conversation is
--- kept by Claude Code: /resume in a new session brings it back. When Claude Code exits by itself the buffer
--- stays to be read, until it is closed or <Leader>AC starts the next session. It is not stored in a session
--- (resession).
---
--- tests/claude_code.lua has the tests, and at its top what to check by hand with the real program.
+-- Claude Code in a buffer: <Leader>AC runs the `claude` program as one terminal buffer in the current window
+-- (lua/user/ai/chat.lua, `open_chat`). The prompt is terminal mode; above it the buffer is text with Neovim's
+-- own keys.
+-- Started with (see `settings`, `environment`, `not_passed`):
+--   - reads outside its directory refused; its vim mode off; the main screen, so the conversation stays in
+--     the buffer; the terminal's own cursor; links printed as addresses for <CR> and gx
+--   - the login, never an API key from Neovim's environment (every command it runs would read it), and no
+--     $NVIM (a command it runs could drive this editor)
+-- <CR> on a file outside the start directory asks first: opening a file starts what the editor has for its
+-- kind. The keys, the behaviour and what to check by hand with the real program: docs/claude-code.md.
 local M = {}
 
 local links = require "user.ai.claude_links"
@@ -95,7 +39,8 @@ local function alive() return S.job ~= nil and vim.fn.jobwait({ S.job }, 0)[1] =
 
 --- The window a chat goes in: the current one, unless it is one that keeps its buffer (a float, the file
 --- tree, the quickfix list). Then the window the cursor came from, or the first that shows a file; and with
---- none of those, a new one. (Also for the CodeCompanion chat: `open_chat` in lua/user/ai/init.lua.)
+--- none of those, a new one. (Also for the CodeCompanion chat: `open_chat` in lua/user/ai/chat.lua.)
+---@return integer win, boolean|nil created whether the window was made by this call
 function M.window()
   local function usable(win)
     if vim.api.nvim_win_get_config(win).relative ~= "" then return false end
@@ -113,7 +58,7 @@ function M.window()
   vim.bo[empty].bufhidden = "wipe"
   local win = vim.api.nvim_open_win(empty, false, { split = "right", win = -1 })
   vim.wo[win].winfixbuf, vim.wo[win].winfixwidth, vim.wo[win].winfixheight = false, false, false
-  return win
+  return win, true
 end
 
 ----------------------------------------------------------------------------------------------------- <CR>
@@ -158,7 +103,7 @@ local function open_file(found)
   end
 end
 
---- Open what the cursor is on (see the top of this file and claude_links.lua).
+--- Open what the cursor is on (docs/claude-code.md; claude_links.lua reads it from the rows).
 local function open_target()
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   local first = math.max(row - context, 1)
@@ -274,8 +219,9 @@ end
 -- the empty rows at the top of the window: the lines of one mark in the session's buffer
 local filler = { ns = vim.api.nvim_create_namespace "user.ai.claude_code.filler", id = 1 }
 
---- Put the last row Claude Code uses on the last row of the current window, when that shows `buf` (see the
---- top of this file): the empty rows under it go below the window, which starts that many rows higher.
+--- Put the last row Claude Code uses on the last row of the current window, when that shows `buf`
+--- (docs/claude-code.md, "The prompt stays at the bottom"): the empty rows under it go below the window, which
+--- starts that many rows higher.
 --- At the prompt it cannot start higher. There Neovim puts the terminal's first row at the top of the
 --- window whenever it looks, and keeps only filler rows above that one ('topfill'): so the rows on top are
 --- filler there, and empty. Above the prompt they are the rows of the conversation, and filler only where
@@ -390,12 +336,17 @@ local function start(argv, opts)
   return started, job
 end
 
-local function launch(win)
+--- Start Claude Code in `win`. `created`: the window was made for it, and goes when nothing starts.
+local function launch(win, created)
+  local function give_up(why)
+    if created then pcall(vim.api.nvim_win_close, win, true) end
+    if why then notify(why, vim.log.levels.ERROR) end
+  end
   local exe = vim.fn.exepath "claude"
-  if exe == "" then return notify("`claude` is not installed (<Leader>As, Set up provider)", vim.log.levels.ERROR) end
+  if exe == "" then return give_up "`claude` is not installed (<Leader>As, Set up provider)" end
   local before = vim.api.nvim_win_get_buf(win)
   local dir, why = start_dir(before)
-  if not dir then return why and notify(why, vim.log.levels.ERROR) end
+  if not dir then return give_up(why) end
 
   local buf = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_set_current_win(win)
@@ -425,7 +376,7 @@ local function launch(win)
   if not started or job <= 0 then
     if vim.api.nvim_buf_is_valid(before) then pcall(vim.api.nvim_win_set_buf, win, before) end
     pcall(vim.api.nvim_buf_delete, buf, { force = true })
-    return notify("Claude Code did not start" .. (started and "" or (":\n" .. tostring(job))), vim.log.levels.ERROR)
+    return give_up("Claude Code did not start" .. (started and "" or (":\n" .. tostring(job))))
   end
   -- (the buffer of a session that ended, which stayed to be read)
   if S.term and S.term ~= buf and vim.api.nvim_buf_is_valid(S.term) then

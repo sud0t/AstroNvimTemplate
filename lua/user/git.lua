@@ -1,7 +1,5 @@
--- Git commands that change a repository, for the file tree (plugins/neo-tree.lua): what changes git's state is run
--- from there, and the keys of a file buffer only look (plugins/gitsigns.lua). Committing is in user/git_commit.lua.
---   Each command but `ignore` runs in the background, so that a slow remote does not freeze Neovim, and says how
---   it ended in a notification.
+-- The Git commands that change a repository, run from the file tree (plugins/neo-tree.lua, user/git_prompts.lua).
+-- All but `ignore` run in the background and report in a notification. Committing is in user/git_commit.lua.
 local M = {}
 
 ---@class user.git.Repository
@@ -9,10 +7,10 @@ local M = {}
 ---@field on_change? fun() called when a command has ended, as the repository may have changed
 
 -- The first argument of a command that is given paths: they are the names of files, not patterns. Not for every
--- command: under it `stash --include-untracked` leaves untracked files behind and `check-ignore` finds nothing.
+-- command: under it `stash --include-untracked` leaves untracked files behind and `check-ignore` refuses to run.
 M.LITERAL_PATHS = "--literal-pathspecs"
 
--- Git asks for a password on the terminal, which is Neovim's screen here: it fails instead, and says so.
+-- Over HTTPS git asks for a password on the terminal, which is Neovim's screen here: it fails instead, and says so.
 local ENV = { GIT_TERMINAL_PROMPT = "0" }
 
 ---@class user.git.Report
@@ -81,13 +79,23 @@ end
 ---@param stash string the stash as git names it, like stash@{0}
 function M.drop_stash(repo, stash) run(repo, { "stash", "drop", stash }, { title = "git stash drop" }) end
 
+---@param repo user.git.Repository
+---@param branch string
+---@return boolean
+local function has_branch(repo, branch)
+  local cmd = { "git", "show-ref", "--verify", "--quiet", "refs/heads/" .. branch }
+  return vim.system(cmd, { cwd = repo.dir }):wait().code == 0
+end
+
 --- Checks out a branch or a commit. A branch of a remote, named as `git branch --all` names it, becomes a local
---- branch that follows it.
+--- branch that follows it; the local branch of its name is checked out when the repository has one already.
 ---@param repo user.git.Repository
 ---@param ref string
 function M.checkout(repo, ref)
   local branch = ref:match "^remotes/[^/]+/(.+)$"
-  run(repo, branch and { "checkout", "-b", branch, ref } or { "checkout", ref }, { title = "git checkout" })
+  local args = { "checkout", ref }
+  if branch then args = has_branch(repo, branch) and { "checkout", branch } or { "checkout", "-b", branch, ref } end
+  run(repo, args, { title = "git checkout" })
 end
 
 --- Takes the last commit back. What it changed stays, staged.
@@ -150,6 +158,7 @@ function M.ignore(repo, path)
   -- git names the top of the repository by its real path, which the path asked about need not be
   local inside = vim.fs.relpath(root, vim.uv.fs_realpath(path) or path)
   if not inside then return say(name .. " is not in the repository " .. root, vim.log.levels.ERROR) end
+  if inside == "." then return say("The top of the repository cannot be ignored", vim.log.levels.WARN) end
 
   -- the path as a pattern for itself: from the top (the first /), and with what a pattern reads as more than a
   -- character escaped
